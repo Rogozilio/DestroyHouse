@@ -66,6 +66,45 @@ export class JoltPhysics {
     return id;
   }
 
+  addSphere(position, radius, mass, velocity) {
+    const Jolt = this.Jolt;
+    const shape = new Jolt.SphereShape(radius, null);
+    const settings = new Jolt.BodyCreationSettings(
+      shape,
+      new Jolt.RVec3(position.x, position.y, position.z),
+      Jolt.Quat.prototype.sIdentity(),
+      Jolt.EMotionType_Dynamic,
+      LAYER_DYNAMIC,
+    );
+    settings.mLinearDamping = 0.03;
+    settings.mAngularDamping = 0.12;
+    settings.mOverrideMassProperties = Jolt.EOverrideMassProperties_CalculateInertia;
+    settings.mMassPropertiesOverride.mMass = mass;
+
+    const createdId = this.bodyInterface.CreateAndAddBody(settings, Jolt.EActivation_Activate);
+    const bodyId = new Jolt.BodyID(createdId.GetIndexAndSequenceNumber());
+    this.bodyInterface.SetFriction(bodyId, 0.62);
+    this.bodyInterface.SetRestitution(bodyId, 0.04);
+    this.bodyInterface.SetLinearVelocity(
+      bodyId,
+      new Jolt.Vec3(velocity.x, velocity.y, velocity.z),
+    );
+    return bodyId;
+  }
+
+  removeBody(bodyId) {
+    if (!bodyId) return;
+    this.bodyInterface.RemoveBody(bodyId);
+    this.bodyInterface.DestroyBody(bodyId);
+  }
+
+  syncBody(mesh, bodyId) {
+    const p = this.bodyInterface.GetPosition(bodyId);
+    const q = this.bodyInterface.GetRotation(bodyId);
+    mesh.position.set(p.GetX(), p.GetY(), p.GetZ());
+    mesh.quaternion.set(q.GetX(), q.GetY(), q.GetZ(), q.GetW());
+  }
+
   initializeClusters(shards, pairs, anchorIndices, options = {}) {
     this.shards = shards.map((shard, index) => ({
       index,

@@ -45,7 +45,7 @@ export class ImGuiPanel {
     let y = 16;
     const w = 292;
     const row = 28;
-    const h = 570;
+    const h = 617;
 
     roundRect(ctx, x, y, w, h, 8, COLORS.bg, COLORS.border);
     ctx.font = '600 14px Inter, system-ui, sans-serif';
@@ -56,6 +56,7 @@ export class ImGuiPanel {
     ctx.fillText(`Jolt ${stats.physics}  S:${stats.shards}  Bodies:${stats.bodies}  Joints:${stats.joints}`, x + 14, y + 44);
 
     y += 64;
+    y = this.combo(x + 14, y, w - 28, 'Interaction', ['impact', 'ball'], 'interactionMode') + 5;
     y = this.combo(x + 14, y, w - 28, 'Fracture', ['voronoi', 'ridge', 'bands', 'turbulence'], 'noise') + 5;
     y = this.combo(x + 14, y, w - 28, 'Joint type', ['fixed', 'locked', 'distance'], 'jointType') + 5;
     y = this.slider(x + 14, y, w - 28, 'Target shards', 'shards', 8, 160, 1) + 4;
@@ -168,7 +169,8 @@ export class ImGuiPanel {
       if (active.type === 'button') active.action();
       if (active.type === 'combo') {
         this.state[active.key] = active.value;
-        this.callbacks.refracture();
+        if (active.key === 'interactionMode') this.draw();
+        else this.callbacks.refracture();
       }
       if (active.type === 'checkbox') {
         this.state[active.key] = !this.state[active.key];

@@ -68,9 +68,11 @@ const lineMaterial = new THREE.LineBasicMaterial({ color: 0x49b6b0, transparent:
 const shardGroup = new THREE.Group();
 const jointGroup = new THREE.Group();
 const ghostGroup = new THREE.Group();
-scene.add(shardGroup, jointGroup, ghostGroup);
+const projectileGroup = new THREE.Group();
+scene.add(shardGroup, jointGroup, ghostGroup, projectileGroup);
 
 const raycaster = new THREE.Raycaster();
+const projectileRaycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const timer = new THREE.Timer();
 const loadColor = new THREE.Color();
@@ -78,6 +80,7 @@ const insideLoadColor = new THREE.Color();
 timer.connect(document);
 
 const state = {
+  interactionMode: 'impact',
   noise: 'voronoi',
   shards: 64,
   noiseStrength: 0.9,
@@ -100,8 +103,20 @@ let physics = null;
 let source = null;
 let bounds = null;
 let shardRecords = [];
+let projectiles = [];
 let sourceRoot = null;
 let renderedJointRevision = -1;
+
+const projectileRadius = 0.16;
+const projectileLifetime = 4000;
+const projectileGeometry = new THREE.SphereGeometry(projectileRadius, 24, 16);
+const projectileMaterial = new THREE.MeshStandardMaterial({
+  color: 0xe5a83f,
+  emissive: 0x4a2205,
+  emissiveIntensity: 0.45,
+  roughness: 0.34,
+  metalness: 0.42,
+});
 
 const panel = new ImGuiPanel(uiCanvas, state, {
   refracture: () => rebuild(),
@@ -138,6 +153,7 @@ async function init() {
 
 async function rebuild() {
   if (!source || !physics) return;
+  clearProjectiles();
   clearGroups();
   physics = await JoltPhysics.create();
 
@@ -219,6 +235,12 @@ function clearGroups() {
   shardRecords = [];
 }
 
+function clearProjectiles() {
+  for (const projectile of projectiles) physics?.removeBody(projectile.bodyId);
+  projectileGroup.clear();
+  projectiles = [];
+}
+
 function normalizeSource(root) {
   const box = new THREE.Box3().setFromObject(root);
   const size = box.getSize(new THREE.Vector3());
@@ -246,6 +268,11 @@ function onScenePointer(event) {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
+  if (state.interactionMode === 'ball') {
+    spawnProjectile(raycaster.ray);
+    return;
+  }
+
   const surfaceHits = raycaster.intersectObjects(
     shardRecords.map((record) => record.surface),
     false,
@@ -355,6 +382,108 @@ function onScenePointer(event) {
   panel.draw();
 }
 
+function spawnProjectile(ray) {
+  const direction = ray.direction.clone().normalize();
+  const position = camera.position.clone().addScaledVector(direction, projectileRadius + 0.42);
+  const velocity = direction.clone().multiplyScalar(10.5);
+  const mesh = new THREE.Mesh(projectileGeometry, projectileMaterial);
+  mesh.position.copy(position);
+  mesh.castShadow = true;
+  projectileGroup.add(mesh);
+
+  projectiles.push({
+    bodyId: physics.addSphere(position, projectileRadius, 5.5, velocity),
+    mesh,
+    previousPosition: position.clone(),
+    expiresAt: performance.now() + projectileLifetime,
+    hasDamaged: false,
+  });
+  status.textContent = `Ball launched; ${projectiles.length} active projectile${projectiles.length === 1 ? '' : 's'}.`;
+}
+
+function updateProjectiles(timestamp) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const projectile = projectiles[i];
+    physics.syncBody(projectile.mesh, projectile.bodyId);
+
+    if (!projectile.hasDamaged) {
+      const travel = projectile.mesh.position.clone().sub(projectile.previousPosition);
+      const distance = travel.length();
+      if (distance > 1e-5) {
+        const direction = travel.multiplyScalar(1 / distance);
+        projectileRaycaster.ray.origin.copy(projectile.previousPosition);
+        projectileRaycaster.ray.direction.copy(direction);
+        projectileRaycaster.near = 0;
+        projectileRaycaster.far = distance + projectileRadius * 1.5;
+        const hit = projectileRaycaster.intersectObjects(
+          shardRecords.map((record) => record.surface),
+          false,
+        )[0];
+        if (hit) {
+          damageFromProjectile(hit, direction);
+          projectile.hasDamaged = true;
+        }
+      }
+      projectile.previousPosition.copy(projectile.mesh.position);
+    }
+
+    if (timestamp >= projectile.expiresAt) removeProjectile(i);
+  }
+}
+
+function damageFromProjectile(hit, direction) {
+  const directRecord = shardRecords.find((record) => record.surface === hit.object);
+  if (!directRecord) return;
+
+  const damageRadius = Math.max(projectileRadius * 2, state.impactRadius * 0.8);
+  const impacted = shardRecords
+    .map((record) => ({ record, distance: record.mesh.position.distanceTo(hit.point) }))
+    .filter(({ distance }) => distance <= damageRadius)
+    .sort((a, b) => a.distance - b.distance);
+  if (!impacted.some(({ record }) => record === directRecord)) {
+    impacted.unshift({ record: directRecord, distance: 0 });
+  }
+
+  let brokenBonds = physics.damageShards(impacted.map(({ record }) => record.index));
+  brokenBonds += physics.detachShard(directRecord.index);
+  const clusterImpulses = new Map();
+
+  for (const { record, distance } of impacted) {
+    physics.releaseShard(record.index);
+    const falloff = Math.max(0.22, 1 - distance / damageRadius);
+    const radial = record.mesh.position.clone().sub(hit.point).normalize();
+    const impulse = direction.clone().multiplyScalar(state.impactForce * 1.2 * falloff)
+      .add(radial.multiplyScalar(state.impactForce * 0.35 * falloff));
+    const clusterId = physics.getClusterIdForShard(record.index);
+    const entry = clusterImpulses.get(clusterId) ?? {
+      index: record.index,
+      impulse: new THREE.Vector3(),
+      count: 0,
+    };
+    entry.impulse.add(impulse);
+    entry.count++;
+    clusterImpulses.set(clusterId, entry);
+  }
+
+  for (const entry of clusterImpulses.values()) {
+    entry.impulse.multiplyScalar(1 / entry.count);
+    physics.addImpulseToShard(entry.index, entry.impulse, hit.point);
+  }
+
+  const support = physics.releaseUnsupported();
+  state.stats.bodies = physics.getClusterCount();
+  state.stats.joints = physics.constraints.length;
+  status.textContent = `Ball impact: broke ${brokenBonds} bonds, ${state.stats.bodies} bodies, ${state.stats.joints} joints, ${support.anchors} anchors.`;
+  panel.draw();
+}
+
+function removeProjectile(index) {
+  const [projectile] = projectiles.splice(index, 1);
+  if (!projectile) return;
+  physics.removeBody(projectile.bodyId);
+  projectileGroup.remove(projectile.mesh);
+}
+
 function makeJointLine(a, b) {
   const geometry = new THREE.BufferGeometry().setFromPoints([a.clone(), b.clone()]);
   return new THREE.Line(geometry, lineMaterial);
@@ -417,6 +546,7 @@ function animate(timestamp) {
       panel.draw();
     }
     for (const record of shardRecords) physics.syncShard(record.mesh, record.index);
+    updateProjectiles(timestamp);
     updateLoadColors();
     updateJointLines();
   }
