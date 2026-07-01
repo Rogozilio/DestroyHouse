@@ -180,6 +180,10 @@ export class JoltPhysics {
     }
     const shape = shapeResult.Get();
     const anchored = shardIndices.some((index) => this.anchorShards.has(index));
+    const clusterMass = shardIndices.reduce(
+      (sum, index) => sum + this.shards[index].mass,
+      0,
+    );
     const motion = anchored ? Jolt.EMotionType_Static : Jolt.EMotionType_Dynamic;
     const layer = anchored ? LAYER_STATIC : LAYER_DYNAMIC;
     const settings = new Jolt.BodyCreationSettings(
@@ -192,6 +196,8 @@ export class JoltPhysics {
     settings.mLinearDamping = 0.18;
     settings.mAngularDamping = 0.88;
     settings.mMaxAngularVelocity = 3;
+    settings.mOverrideMassProperties = Jolt.EOverrideMassProperties_CalculateInertia;
+    settings.mMassPropertiesOverride.mMass = Math.max(10, clusterMass * 10);
 
     const createdId = this.bodyInterface.CreateAndAddBody(
       settings,
