@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jolt Fracture Lab</title>
+    <link rel="stylesheet" href="./src/styles.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <canvas id="ui" aria-label="Fracture controls"></canvas>
+    <div id="status" role="status">Loading Jolt and FBX...</div>
+    <script>
+      window.addEventListener('error', (event) => {
+        const status = document.querySelector('#status');
+        if (status) status.textContent = `Module error: ${event.message}`;
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        const status = document.querySelector('#status');
+        if (status) status.textContent = `Promise error: ${event.reason?.message || event.reason}`;
+      });
+    </script>
+    <script type="module" src="./src/main.js?v=4"></script>
+  </body>
+</html>

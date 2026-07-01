@@ -1,0 +1,14 @@
+{
+  "name": "destroy-house-fracture-jolt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "preview": "node server.mjs"
+  },
+  "dependencies": {
+    "jolt-physics": "^1.0.0"
+  },
+  "devDependencies": {}
+}

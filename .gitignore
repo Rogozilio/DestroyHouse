@@ -1,0 +1,5 @@
+node_modules/
+server.out.log
+server.err.log
+artifacts/
+*.zip

@@ -1,0 +1,22 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      jolt-physics:
+        specifier: ^1.0.0
+        version: 1.0.0
+
+packages:
+
+  jolt-physics@1.0.0:
+    resolution: {integrity: sha512-rA7Mcb3CDqsDzr0J15P2DDftMR4d15/B6hfvvVh88Se3KFCYXGbPKGK2sJFGOpzUksRpyQhgbfLHgHL4SA5UzQ==}
+
+snapshots:
+
+  jolt-physics@1.0.0: {}
