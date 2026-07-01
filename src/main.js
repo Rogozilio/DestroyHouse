@@ -112,6 +112,7 @@ const state = {
 
 let physics = null;
 let source = null;
+let houseOffsets = [];
 let bounds = null;
 let shardRecords = [];
 let projectiles = [];
@@ -150,12 +151,26 @@ async function init() {
 
   sourceRoot = await new FBXLoader().loadAsync(new URL('../assets/Home.fbx', import.meta.url).href);
   normalizeSource(sourceRoot);
-  ghostGroup.add(sourceRoot.clone());
+  source = extractTriangles(sourceRoot);
+  const houseSize = source.bounds.getSize(new THREE.Vector3());
+  const spacing = new THREE.Vector2(houseSize.x * 1.18, houseSize.z * 1.18);
+  houseOffsets = [
+    new THREE.Vector3(-spacing.x * 0.5, 0, -spacing.y * 0.5),
+    new THREE.Vector3(spacing.x * 0.5, 0, -spacing.y * 0.5),
+    new THREE.Vector3(-spacing.x * 0.5, 0, spacing.y * 0.5),
+    new THREE.Vector3(spacing.x * 0.5, 0, spacing.y * 0.5),
+  ];
+
+  for (const offset of houseOffsets) {
+    const house = sourceRoot.clone(true);
+    house.position.add(offset);
+    ghostGroup.add(house);
+  }
   ghostGroup.traverse((node) => {
     if (node.isMesh) node.material = ghostMaterial;
   });
-  source = extractTriangles(sourceRoot);
-  bounds = source.bounds;
+  bounds = new THREE.Box3();
+  for (const offset of houseOffsets) bounds.union(source.bounds.clone().translate(offset));
 
   fitCamera(bounds);
   await rebuild();
@@ -169,15 +184,47 @@ async function rebuild() {
   physics = await JoltPhysics.create();
 
   const fracture = createFracture(source, state);
-  bounds = fracture.bounds;
+  bounds = new THREE.Box3();
+  for (const offset of houseOffsets) bounds.union(source.bounds.clone().translate(offset));
+
+  const allShards = [];
+  const allPairs = [];
+  const basePairs = findNeighborPairs(
+    fracture.shards,
+    fracture.bounds,
+    Math.floor(fracture.shards.length * 3.5),
+  );
+  for (let houseIndex = 0; houseIndex < houseOffsets.length; houseIndex++) {
+    const shardOffset = allShards.length;
+    const offset = houseOffsets[houseIndex];
+    for (const shard of fracture.shards) {
+      allShards.push({
+        ...shard,
+        index: allShards.length,
+        geometry: shard.geometry,
+        center: shard.center.clone().add(offset),
+        bounds: shard.bounds.clone().translate(offset),
+        seed: shard.seed.clone().add(offset),
+        half: shard.half.clone(),
+      });
+    }
+    for (const pair of basePairs) {
+      allPairs.push({
+        ...pair,
+        a: pair.a + shardOffset,
+        b: pair.b + shardOffset,
+      });
+    }
+  }
+
   const minY = bounds.min.y;
   const size = bounds.getSize(new THREE.Vector3());
   const floorY = minY - Math.max(0.04, size.y * 0.015);
-  const visualMinHalf = size.clone().multiplyScalar(0.008);
+  const visualMinHalf = source.bounds.getSize(new THREE.Vector3()).multiplyScalar(0.008);
   floor.position.y = floorY;
   physics.addFloor(floorY, Math.max(8, size.length() * 2.2));
 
-  shardRecords = fracture.shards.map((shard) => {
+  shardRecords = allShards.map((shard) => {
     const mesh = new THREE.Group();
     const surface = new THREE.Mesh(shard.geometry, [
       shardOuterMaterial.clone(),
@@ -205,11 +252,10 @@ async function rebuild() {
     };
   });
 
-  const pairs = findNeighborPairs(fracture.shards, bounds, Math.floor(fracture.shards.length * 3.5));
   const anchorIndices = shardRecords
     .filter((record) => record.isAnchor)
     .map((record) => record.index);
-  physics.initializeClusters(fracture.shards, pairs, anchorIndices, {
+  physics.initializeClusters(allShards, allPairs, anchorIndices, {
     clusterSize: state.clusterSize,
     jointSoftness: state.jointSoftness,
     jointType: state.jointType,
@@ -221,7 +267,7 @@ async function rebuild() {
   state.stats.shards = shardRecords.length;
   state.stats.bodies = physics.getClusterCount();
   state.stats.joints = physics.constraints.length;
-  status.textContent = `${fracture.mode}: ${state.stats.shards} shards in ${state.stats.bodies} compound bodies, ${state.stats.joints} inter-cluster joints.`;
+  status.textContent = `4 houses, ${fracture.mode}: ${state.stats.shards} shards in ${state.stats.bodies} compound bodies, ${state.stats.joints} inter-cluster joints.`;
   panel.draw();
 }
 
