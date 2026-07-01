@@ -21,9 +21,10 @@ The site will be published at `https://<user>.github.io/<repository>/`.
 
 ## Included
 
-- FBX triangle extraction and noise-driven Voronoi assignment.
-- Four fracture fields: `voronoi`, `ridge`, `bands`, and `turbulence`.
-- Adaptive surface tessellation produces 24-320 local shards even from low-poly source meshes.
+- FBX meshes are merged and fractured into closed volumetric fragments.
+- True 3D Voronoi fracture uses `three-pinata`, the Three.js successor to OpenFracture.
+- Internal cut faces are triangulated, UV-mapped, and rendered with a separate material.
+- Directed recursive slice modes provide `ridge`, `bands`, and `turbulence` alternatives.
 - Neighboring intact shards are packed into Jolt compound rigid clusters.
 - Logical per-shard bonds replace internal physics joints and split only the damaged cluster.
 - Jolt `fixed`, rotation-locked `SixDOF`, and `distance` constraints connect rigid clusters.

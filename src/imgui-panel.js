@@ -45,7 +45,7 @@ export class ImGuiPanel {
     let y = 16;
     const w = 292;
     const row = 28;
-    const h = 646;
+    const h = 570;
 
     roundRect(ctx, x, y, w, h, 8, COLORS.bg, COLORS.border);
     ctx.font = '600 14px Inter, system-ui, sans-serif';
@@ -56,12 +56,10 @@ export class ImGuiPanel {
     ctx.fillText(`Jolt ${stats.physics}  S:${stats.shards}  Bodies:${stats.bodies}  Joints:${stats.joints}`, x + 14, y + 44);
 
     y += 64;
-    y = this.combo(x + 14, y, w - 28, 'Noise', ['voronoi', 'ridge', 'bands', 'turbulence'], 'noise') + 5;
+    y = this.combo(x + 14, y, w - 28, 'Fracture', ['voronoi', 'ridge', 'bands', 'turbulence'], 'noise') + 5;
     y = this.combo(x + 14, y, w - 28, 'Joint type', ['fixed', 'locked', 'distance'], 'jointType') + 5;
-    y = this.slider(x + 14, y, w - 28, 'Target shards', 'shards', 24, 320, 1) + 4;
+    y = this.slider(x + 14, y, w - 28, 'Target shards', 'shards', 8, 160, 1) + 4;
     y = this.slider(x + 14, y, w - 28, 'Cluster size', 'clusterSize', 2, 24, 1) + 4;
-    y = this.slider(x + 14, y, w - 28, 'Noise strength', 'noiseStrength', 0, 3, 0.05) + 4;
-    y = this.slider(x + 14, y, w - 28, 'Anisotropy', 'anisotropy', 0, 4, 0.05) + 4;
     y = this.slider(x + 14, y, w - 28, 'Joint slack', 'jointSoftness', 0, 0.35, 0.01) + 4;
     y = this.slider(x + 14, y, w - 28, 'Load safety', 'loadSafety', 1.1, 6, 0.05) + 4;
     y = this.slider(x + 14, y, w - 28, 'Failure delay', 'failureDelay', 0.05, 1, 0.05) + 4;
@@ -79,8 +77,6 @@ export class ImGuiPanel {
     y += 27;
 
     ctx.fillStyle = COLORS.dim;
-    ctx.fillText('Hits split only the locally damaged compound body.', x + 14, y);
-    ctx.fillText('Internal bonds replace per-shard physics joints.', x + 14, y + 18);
   }
 
   slider(x, y, w, label, key, min, max, step) {

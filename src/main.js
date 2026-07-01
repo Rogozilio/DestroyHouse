@@ -37,12 +37,19 @@ floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 scene.add(floor);
 
-const shardMaterial = new THREE.MeshStandardMaterial({
+const shardOuterMaterial = new THREE.MeshStandardMaterial({
   color: 0x39c85a,
   vertexColors: false,
   side: THREE.DoubleSide,
   roughness: 0.78,
   metalness: 0.02,
+});
+const shardInnerMaterial = new THREE.MeshStandardMaterial({
+  color: 0x1f6f35,
+  vertexColors: false,
+  side: THREE.DoubleSide,
+  roughness: 0.94,
+  metalness: 0,
 });
 const proxyMaterial = new THREE.MeshBasicMaterial({
   colorWrite: false,
@@ -67,11 +74,12 @@ const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const timer = new THREE.Timer();
 const loadColor = new THREE.Color();
+const insideLoadColor = new THREE.Color();
 timer.connect(document);
 
 const state = {
   noise: 'voronoi',
-  shards: 180,
+  shards: 64,
   noiseStrength: 0.9,
   anisotropy: 1.25,
   jointType: 'locked',
@@ -144,7 +152,10 @@ async function rebuild() {
 
   shardRecords = fracture.shards.map((shard) => {
     const mesh = new THREE.Group();
-    const surface = new THREE.Mesh(shard.geometry, shardMaterial.clone());
+    const surface = new THREE.Mesh(shard.geometry, [
+      shardOuterMaterial.clone(),
+      shardInnerMaterial.clone(),
+    ]);
     const visualHalf = shard.half.clone().max(visualMinHalf);
     const proxy = new THREE.Mesh(
       new THREE.BoxGeometry(visualHalf.x * 2.04, visualHalf.y * 2.04, visualHalf.z * 2.04),
@@ -192,7 +203,12 @@ function resetSimulation() {
 }
 
 function clearGroups() {
-  for (const record of shardRecords) record.surface.material.dispose();
+  for (const record of shardRecords) {
+    const materials = Array.isArray(record.surface.material)
+      ? record.surface.material
+      : [record.surface.material];
+    for (const material of materials) material.dispose();
+  }
   for (const group of [shardGroup, jointGroup]) {
     while (group.children.length) {
       const child = group.children.pop();
@@ -361,7 +377,12 @@ function updateLoadColors() {
   for (const record of shardRecords) {
     const ratio = THREE.MathUtils.clamp(ratios.get(record.index) ?? 0, 0, 1);
     loadColor.setHSL((1 - ratio) * 0.33, 0.82, 0.48);
-    record.surface.material.color.copy(loadColor);
+    insideLoadColor.copy(loadColor).multiplyScalar(0.48);
+    const materials = Array.isArray(record.surface.material)
+      ? record.surface.material
+      : [record.surface.material];
+    materials[0].color.copy(loadColor);
+    materials[1]?.color.copy(insideLoadColor);
   }
 }
 

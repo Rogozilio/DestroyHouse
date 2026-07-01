@@ -8,15 +8,32 @@ importers:
 
   .:
     dependencies:
+      '@dgreenheck/three-pinata':
+        specifier: 2.0.1
+        version: 2.0.1(three@0.185.0)
       jolt-physics:
         specifier: ^1.0.0
         version: 1.0.0
 
 packages:
 
+  '@dgreenheck/three-pinata@2.0.1':
+    resolution: {integrity: sha512-1pQU68B5xguxvRryl6nxZBARDqOW+/lXf7Xpz8QZ87awadSpN85mDNChTEdA4fPfJYyrft+thHS6Ooe7E5rdFA==}
+    peerDependencies:
+      three: '>=0.158.0'
+
   jolt-physics@1.0.0:
     resolution: {integrity: sha512-rA7Mcb3CDqsDzr0J15P2DDftMR4d15/B6hfvvVh88Se3KFCYXGbPKGK2sJFGOpzUksRpyQhgbfLHgHL4SA5UzQ==}
 
+  three@0.185.0:
+    resolution: {integrity: sha512-+yRrcRO2iZa8uzvNNl0d7cL4huhgKgBvVJ0njcTe8xFqZ6DMAFZdCKDP91SEAuj25bNAj7k1QQdf+srZywVK6w==}
+
 snapshots:
 
+  '@dgreenheck/three-pinata@2.0.1(three@0.185.0)':
+    dependencies:
+      three: 0.185.0
+
   jolt-physics@1.0.0: {}
+
+  three@0.185.0: {}

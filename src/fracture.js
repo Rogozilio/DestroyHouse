@@ -1,25 +1,37 @@
 import * as THREE from 'three';
-import { fractureNoise, hash3 } from './noise.js';
+import { DestructibleMesh, FractureOptions } from '../vendor/three-pinata/three-pinata.es.js';
+import { fractureNoise } from './noise.js';
 
 const tmpBox = new THREE.Box3();
-const tmpVec = new THREE.Vector3();
 
 export function extractTriangles(root) {
   root.updateWorldMatrix(true, true);
   const triangles = [];
   const bounds = new THREE.Box3();
+  const mergedPositions = [];
+  const mergedNormals = [];
+  const mergedUvs = [];
   let material = null;
 
   root.traverse((node) => {
     if (!node.isMesh || !node.geometry?.attributes?.position) return;
     const geometry = node.geometry;
     const position = geometry.attributes.position;
+    const normal = geometry.attributes.normal;
+    const uv = geometry.attributes.uv;
     const index = geometry.index;
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(node.matrixWorld);
     material ||= Array.isArray(node.material) ? node.material[0] : node.material;
 
     const readVertex = (i) => new THREE.Vector3()
       .fromBufferAttribute(position, i)
       .applyMatrix4(node.matrixWorld);
+    const readNormal = (i, fallback) => normal
+      ? new THREE.Vector3().fromBufferAttribute(normal, i).applyMatrix3(normalMatrix).normalize()
+      : fallback.clone();
+    const readUv = (i) => uv
+      ? new THREE.Vector2().fromBufferAttribute(uv, i)
+      : new THREE.Vector2();
 
     const triCount = index ? index.count / 3 : position.count / 3;
     for (let i = 0; i < triCount; i++) {
@@ -30,210 +42,129 @@ export function extractTriangles(root) {
       const b = readVertex(ib);
       const c = readVertex(ic);
       const centroid = new THREE.Vector3().addVectors(a, b).add(c).multiplyScalar(1 / 3);
+      const faceNormal = new THREE.Vector3()
+        .subVectors(b, a)
+        .cross(new THREE.Vector3().subVectors(c, a))
+        .normalize();
+      for (const [vertexIndex, vertex] of [[ia, a], [ib, b], [ic, c]]) {
+        const vertexNormal = readNormal(vertexIndex, faceNormal);
+        const vertexUv = readUv(vertexIndex);
+        mergedPositions.push(vertex.x, vertex.y, vertex.z);
+        mergedNormals.push(vertexNormal.x, vertexNormal.y, vertexNormal.z);
+        mergedUvs.push(vertexUv.x, vertexUv.y);
+      }
       triangles.push({ a, b, c, centroid });
       bounds.expandByPoint(a).expandByPoint(b).expandByPoint(c);
     }
   });
 
-  return { triangles, bounds, material };
-}
-
-export function createFracture(source, options) {
-  const { triangles, bounds } = source;
-  if (triangles.length < 8 || bounds.isEmpty()) {
-    return createProxyFracture(source.bounds, options);
-  }
-
-  const seedCount = Math.max(4, options.shards | 0);
-  const detailedTriangles = tessellateTriangles(triangles, seedCount);
-  const seeds = makeSeeds(detailedTriangles, bounds, seedCount, options);
-  const buckets = Array.from({ length: seeds.length }, () => []);
-  const size = bounds.getSize(new THREE.Vector3());
-  const center = bounds.getCenter(new THREE.Vector3());
-  const inv = new THREE.Vector3(1 / Math.max(size.x, 0.001), 1 / Math.max(size.y, 0.001), 1 / Math.max(size.z, 0.001));
-  const cellScaleSq = size.lengthSq() / Math.max(seedCount, 1);
-
-  for (const tri of detailedTriangles) {
-    const p = tri.centroid;
-    const normalized = tmpVec.copy(p).sub(center).multiply(inv);
-    let best = 0;
-    let bestScore = Infinity;
-
-    for (let i = 0; i < seeds.length; i++) {
-      const seed = seeds[i];
-      const n = fractureNoise(options.noise, normalized, options.seed + i);
-      const dx = (p.x - seed.x) * seed.metric.x;
-      const dy = (p.y - seed.y) * seed.metric.y;
-      const dz = (p.z - seed.z) * seed.metric.z;
-      const noiseOffset = (n - 0.5) * options.noiseStrength * cellScaleSq * seed.noiseScale;
-      const score = dx * dx + dy * dy + dz * dz + noiseOffset;
-      if (score < bestScore) {
-        bestScore = score;
-        best = i;
-      }
-    }
-
-    buckets[best].push(tri);
-  }
-
-  const shards = buckets
-    .map((bucket, index) => bucketToShard(bucket, index, seeds[index], options))
-    .filter(Boolean);
-
-  if (shards.length < 4) return createProxyFracture(bounds, options);
-  return { shards, bounds, mode: 'detailed mesh' };
-}
-
-function tessellateTriangles(triangles, shardCount) {
-  const areas = triangles.map(triangleArea);
-  const totalArea = areas.reduce((sum, area) => sum + area, 0);
-  const targetTriangles = Math.max(triangles.length, shardCount * 18);
-  const detailed = [];
-
-  for (let index = 0; index < triangles.length; index++) {
-    const tri = triangles[index];
-    const share = areas[index] / Math.max(totalArea, 1e-8);
-    const divisions = THREE.MathUtils.clamp(Math.ceil(Math.sqrt(share * targetTriangles)), 1, 14);
-    subdivideTriangle(tri, divisions, detailed);
-  }
-
-  return detailed;
-}
-
-function triangleArea(tri) {
-  const abx = tri.b.x - tri.a.x;
-  const aby = tri.b.y - tri.a.y;
-  const abz = tri.b.z - tri.a.z;
-  const acx = tri.c.x - tri.a.x;
-  const acy = tri.c.y - tri.a.y;
-  const acz = tri.c.z - tri.a.z;
-  const cx = aby * acz - abz * acy;
-  const cy = abz * acx - abx * acz;
-  const cz = abx * acy - aby * acx;
-  return Math.sqrt(cx * cx + cy * cy + cz * cz) * 0.5;
-}
-
-function subdivideTriangle(tri, divisions, target) {
-  const point = (i, j) => {
-    const u = i / divisions;
-    const v = j / divisions;
-    return new THREE.Vector3(
-      tri.a.x + (tri.b.x - tri.a.x) * u + (tri.c.x - tri.a.x) * v,
-      tri.a.y + (tri.b.y - tri.a.y) * u + (tri.c.y - tri.a.y) * v,
-      tri.a.z + (tri.b.z - tri.a.z) * u + (tri.c.z - tri.a.z) * v,
-    );
-  };
-
-  for (let i = 0; i < divisions; i++) {
-    for (let j = 0; j < divisions - i; j++) {
-      const a = point(i, j);
-      const b = point(i + 1, j);
-      const c = point(i, j + 1);
-      target.push(makeTriangle(a, b, c));
-
-      if (i + j < divisions - 1) {
-        const d = point(i + 1, j + 1);
-        target.push(makeTriangle(b, d, c));
-      }
-    }
-  }
-}
-
-function makeTriangle(a, b, c) {
-  return {
-    a,
-    b,
-    c,
-    centroid: new THREE.Vector3().addVectors(a, b).add(c).multiplyScalar(1 / 3),
-  };
-}
-
-function makeSeeds(triangles, bounds, count, options) {
-  const stride = Math.max(1, Math.ceil(triangles.length / 6000));
-  const candidates = [];
-  for (let i = 0; i < triangles.length; i += stride) candidates.push(triangles[i].centroid);
-
-  const seedCount = Math.min(count, candidates.length);
-  const seeds = [];
-  const used = new Set();
-  const minDistances = new Float64Array(candidates.length);
-  minDistances.fill(Infinity);
-  let selected = Math.floor(hash3(count, 2, 7, options.seed) * candidates.length);
-
-  for (let i = 0; i < seedCount; i++) {
-    const position = candidates[selected];
-    used.add(selected);
-
-    seeds.push({
-      x: position.x,
-      y: position.y,
-      z: position.z,
-      metric: new THREE.Vector3(
-        1 + hash3(i, 19, 23, options.seed) * options.anisotropy,
-        1 + hash3(i, 29, 31, options.seed) * options.anisotropy,
-        1 + hash3(i, 37, 41, options.seed) * options.anisotropy,
-      ),
-      noiseScale: 0.55 + hash3(i, 43, 47, options.seed) * 0.9,
-    });
-
-    let next = selected;
-    let bestDistance = -1;
-    for (let candidate = 0; candidate < candidates.length; candidate++) {
-      if (used.has(candidate)) continue;
-      const distance = candidates[candidate].distanceToSquared(position);
-      minDistances[candidate] = Math.min(minDistances[candidate], distance);
-      const jitter = 0.9 + hash3(candidate, i, 53, options.seed) * 0.2;
-      const score = minDistances[candidate] * jitter;
-      if (score > bestDistance) {
-        bestDistance = score;
-        next = candidate;
-      }
-    }
-    selected = next;
-  }
-
-  return seeds;
-}
-
-function bucketToShard(bucket, index, seed, options) {
-  if (bucket.length === 0) return null;
-
-  const positions = [];
-  const colors = [];
-  const bounds = new THREE.Box3();
-  const tint = new THREE.Color().setHSL(0.045 + (index % 11) * 0.022, 0.62, 0.52 + (index % 5) * 0.035);
-
-  for (const tri of bucket) {
-    for (const vertex of [tri.a, tri.b, tri.c]) {
-      positions.push(vertex.x, vertex.y, vertex.z);
-      bounds.expandByPoint(vertex);
-      colors.push(tint.r, tint.g, tint.b);
-    }
-  }
-
-  const center = bounds.getCenter(new THREE.Vector3());
-  for (let i = 0; i < positions.length; i += 3) {
-    positions[i] -= center.x;
-    positions[i + 1] -= center.y;
-    positions[i + 2] -= center.z;
-  }
-
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geometry.computeVertexNormals();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(mergedPositions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(mergedNormals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(mergedUvs, 2));
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
 
+  return { triangles, bounds, material, geometry };
+}
+
+export function createFracture(source, options) {
+  const { triangles, bounds, geometry } = source;
+  if (triangles.length < 8 || bounds.isEmpty() || !geometry?.attributes?.position) {
+    return createProxyFracture(source.bounds, options);
+  }
+
+  const fragmentCount = THREE.MathUtils.clamp(options.shards | 0, 8, 160);
+  const destructible = new DestructibleMesh(geometry);
+  destructible.updateMatrixWorld(true);
+  const modeSeed = {
+    voronoi: 0,
+    ridge: 1009,
+    bands: 2027,
+    turbulence: 4051,
+  }[options.noise] ?? 0;
+  let fractureOptions;
+
+  if (options.noise === 'voronoi') {
+    fractureOptions = new FractureOptions({
+      fractureMethod: 'voronoi',
+      fragmentCount,
+      seed: options.seed + modeSeed,
+      textureScale: new THREE.Vector2(0.8, 0.8),
+      voronoiOptions: {
+        mode: '3D',
+        useApproximation: fragmentCount > 32,
+        approximationNeighborCount: Math.min(24, Math.max(18, Math.round(Math.sqrt(fragmentCount) * 2.5))),
+      },
+    });
+  } else {
+    const fracturePlanes = options.noise === 'bands'
+      ? { x: false, y: true, z: false }
+      : options.noise === 'ridge'
+        ? { x: true, y: false, z: true }
+        : { x: true, y: true, z: true };
+    fractureOptions = new FractureOptions({
+      fractureMethod: 'simple',
+      fragmentCount,
+      fracturePlanes,
+      seed: options.seed + modeSeed,
+      textureScale: new THREE.Vector2(0.8, 0.8),
+    });
+  }
+
+  const fragments = destructible.fracture(fractureOptions);
+  const shards = fragments
+    .map((fragment, index) => fragmentToShard(fragment, index, options.density))
+    .filter((shard) => shard.geometry.index?.count >= 12);
+
+  if (shards.length < 4) return createProxyFracture(bounds, options);
+  return {
+    shards,
+    bounds,
+    mode: options.noise === 'voronoi' ? 'volumetric 3D Voronoi' : `volumetric ${options.noise}`,
+  };
+}
+
+function fragmentToShard(fragment, index, density) {
+  const geometry = fragment.geometry;
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  const localBounds = geometry.boundingBox.clone();
+  const center = fragment.position.clone();
+  const bounds = localBounds.clone().translate(center);
+  const half = localBounds.getSize(new THREE.Vector3())
+    .multiplyScalar(0.5)
+    .max(new THREE.Vector3(0.025, 0.025, 0.025));
   return {
     index,
     geometry,
     center,
-    half: bounds.getSize(new THREE.Vector3()).multiplyScalar(0.5).max(new THREE.Vector3(0.04, 0.04, 0.04)),
+    half,
     bounds,
-    seed: new THREE.Vector3(seed.x, seed.y, seed.z),
-    mass: Math.max(0.15, bucket.length * 0.025 * options.density),
+    seed: center.clone(),
+    mass: Math.max(0.15, computeGeometryVolume(geometry) * Math.max(0.1, density) * 8),
   };
+}
+
+function computeGeometryVolume(geometry) {
+  const position = geometry.attributes.position;
+  const index = geometry.index;
+  let volume = 0;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const cross = new THREE.Vector3();
+  const count = index ? index.count : position.count;
+  for (let i = 0; i < count; i += 3) {
+    const ia = index ? index.getX(i) : i;
+    const ib = index ? index.getX(i + 1) : i + 1;
+    const ic = index ? index.getX(i + 2) : i + 2;
+    a.fromBufferAttribute(position, ia);
+    b.fromBufferAttribute(position, ib);
+    c.fromBufferAttribute(position, ic);
+    volume += a.dot(cross.crossVectors(b, c)) / 6;
+  }
+  return Math.abs(volume);
 }
 
 function createProxyFracture(bounds, options) {
