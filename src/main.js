@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from '../vendor/three/examples/jsm/controls/OrbitControls.js';
 import { FBXLoader } from '../vendor/three/examples/jsm/loaders/FBXLoader.js';
-import { createFracture, extractTriangles, findNeighborPairs } from './fracture.js';
-import { JoltPhysics } from './physics.js';
-import { ImGuiPanel } from './imgui-panel.js';
+import { createFracture, extractTriangles, findNeighborPairs } from './fracture.js?v=10';
+import { JoltPhysics } from './physics.js?v=10';
+import { ImGuiPanel } from './imgui-panel.js?v=10';
 
 const canvas = document.querySelector('#scene');
 const uiCanvas = document.querySelector('#ui');

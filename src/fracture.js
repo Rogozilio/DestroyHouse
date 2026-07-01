@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { DestructibleMesh, FractureOptions } from '../vendor/three-pinata/three-pinata.es.js';
-import { fractureNoise } from './noise.js';
+import { fractureNoise } from './noise.js?v=10';
 
 const tmpBox = new THREE.Box3();
 
