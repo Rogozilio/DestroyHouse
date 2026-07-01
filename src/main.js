@@ -246,8 +246,18 @@ function onScenePointer(event) {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(shardGroup.children, true);
-  let hit = hits[0];
+  const surfaceHits = raycaster.intersectObjects(
+    shardRecords.map((record) => record.surface),
+    false,
+  );
+  let hit = surfaceHits[0];
+  if (!hit) {
+    const proxyHits = raycaster.intersectObjects(
+      shardRecords.map((record) => record.proxy),
+      false,
+    );
+    hit = proxyHits[0];
+  }
   if (!hit) {
     let nearest = Infinity;
     const fallbackPoint = new THREE.Vector3();
