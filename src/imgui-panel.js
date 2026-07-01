@@ -45,7 +45,7 @@ export class ImGuiPanel {
     let y = 16;
     const w = 292;
     const row = 28;
-    const h = 641;
+    const h = 679;
 
     roundRect(ctx, x, y, w, h, 8, COLORS.bg, COLORS.border);
     ctx.font = '600 14px Inter, system-ui, sans-serif';
@@ -66,6 +66,7 @@ export class ImGuiPanel {
     y = this.slider(x + 14, y, w - 28, 'Failure delay', 'failureDelay', 0.05, 1, 0.05) + 4;
     y = this.slider(x + 14, y, w - 28, 'Impact force', 'impactForce', 4, 80, 1) + 4;
     y = this.slider(x + 14, y, w - 28, 'Impact radius', 'impactRadius', 0.15, 2.0, 0.05) + 7;
+    y = this.slider(x + 14, y, w - 28, 'Ball speed', 'ballSpeed', 20, 40, 0.5) + 7;
 
     const buttonW = (w - 36) / 2;
     this.button(x + 14, y, buttonW, row, 'Refracture', () => this.callbacks.refracture());
@@ -183,7 +184,7 @@ export class ImGuiPanel {
         if (active.key === 'anchorBase') this.callbacks.refracture();
         this.draw();
       }
-      if (active.type === 'slider' && !['impactForce', 'impactRadius', 'failureDelay'].includes(active.key)) {
+      if (active.type === 'slider' && !['impactForce', 'impactRadius', 'ballSpeed', 'failureDelay'].includes(active.key)) {
         this.callbacks.refracture();
       }
       this.pointer.capture = null;

@@ -78,14 +78,13 @@ export class JoltPhysics {
     );
     settings.mLinearDamping = 0.03;
     settings.mAngularDamping = 0.12;
-    settings.mGravityFactor = 0;
     settings.mOverrideMassProperties = Jolt.EOverrideMassProperties_CalculateInertia;
     settings.mMassPropertiesOverride.mMass = mass;
 
     const createdId = this.bodyInterface.CreateAndAddBody(settings, Jolt.EActivation_Activate);
     const bodyId = new Jolt.BodyID(createdId.GetIndexAndSequenceNumber());
     this.bodyInterface.SetFriction(bodyId, 0.62);
-    this.bodyInterface.SetRestitution(bodyId, 0.04);
+    this.bodyInterface.SetRestitution(bodyId, 0);
     this.bodyInterface.SetLinearVelocity(
       bodyId,
       new Jolt.Vec3(velocity.x, velocity.y, velocity.z),

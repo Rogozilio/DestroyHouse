@@ -76,6 +76,8 @@ scene.add(shardGroup, jointGroup, ghostGroup, projectileGroup);
 
 const raycaster = new THREE.Raycaster();
 const projectileRaycaster = new THREE.Raycaster();
+const projectileHitBox = new THREE.Box3();
+const projectileHitPoint = new THREE.Vector3();
 const pointer = new THREE.Vector2();
 const timer = new THREE.Timer();
 const loadColor = new THREE.Color();
@@ -105,6 +107,7 @@ const state = {
   failureDelay: 0.35,
   impactForce: 34,
   impactRadius: 0.72,
+  ballSpeed: 30,
   density: 1,
   seed: 7,
   anchorBase: true,
@@ -446,7 +449,7 @@ function onScenePointer(event) {
 function spawnProjectile(ray) {
   const direction = ray.direction.clone().normalize();
   const position = camera.position.clone().addScaledVector(direction, projectileRadius + 0.42);
-  const velocity = direction.clone().multiplyScalar(10.5);
+  const velocity = direction.clone().multiplyScalar(state.ballSpeed);
   const mesh = new THREE.Mesh(projectileGeometry, projectileMaterial);
   mesh.position.copy(position);
   mesh.castShadow = true;
@@ -455,6 +458,7 @@ function spawnProjectile(ray) {
   projectiles.push({
     bodyId: physics.addSphere(position, projectileRadius, 5.5, velocity),
     mesh,
+    direction: direction.clone(),
     previousPosition: position.clone(),
     expiresAt: performance.now() + projectileLifetime,
     hasDamaged: false,
@@ -470,26 +474,53 @@ function updateProjectiles(timestamp) {
     if (!projectile.hasDamaged) {
       const travel = projectile.mesh.position.clone().sub(projectile.previousPosition);
       const distance = travel.length();
-      if (distance > 1e-5) {
-        const direction = travel.multiplyScalar(1 / distance);
-        projectileRaycaster.ray.origin.copy(projectile.previousPosition);
-        projectileRaycaster.ray.direction.copy(direction);
-        projectileRaycaster.near = 0;
-        projectileRaycaster.far = distance + projectileRadius * 1.5;
-        const hit = projectileRaycaster.intersectObjects(
-          shardRecords.map((record) => record.surface),
-          false,
-        )[0];
-        if (hit) {
-          damageFromProjectile(hit, direction);
-          projectile.hasDamaged = true;
-        }
+      const sweepDirection = distance > 1e-5
+        ? travel.multiplyScalar(1 / distance)
+        : projectile.direction;
+      const hit = findProjectileHit(
+        projectile.previousPosition,
+        sweepDirection,
+        distance,
+      );
+      if (hit) {
+        damageFromProjectile(hit, projectile.direction);
+        projectile.hasDamaged = true;
       }
       projectile.previousPosition.copy(projectile.mesh.position);
     }
 
     if (timestamp >= projectile.expiresAt) removeProjectile(i);
   }
+}
+
+function findProjectileHit(origin, direction, distance) {
+  const sweepDistance = Math.max(
+    projectileRadius * 2,
+    distance + projectileRadius * 1.5,
+  );
+  projectileRaycaster.ray.origin.copy(origin);
+  projectileRaycaster.ray.direction.copy(direction);
+  projectileRaycaster.near = 0;
+  projectileRaycaster.far = sweepDistance;
+
+  const exactHit = projectileRaycaster.intersectObjects(
+    shardRecords.map((record) => record.surface),
+    false,
+  )[0];
+  if (exactHit) return exactHit;
+
+  let nearestDistance = Infinity;
+  let nearestHit = null;
+  for (const record of shardRecords) {
+    projectileHitBox.setFromObject(record.surface).expandByScalar(projectileRadius * 1.15);
+    const point = projectileRaycaster.ray.intersectBox(projectileHitBox, projectileHitPoint);
+    if (!point) continue;
+    const hitDistance = point.distanceTo(origin);
+    if (hitDistance > sweepDistance || hitDistance >= nearestDistance) continue;
+    nearestDistance = hitDistance;
+    nearestHit = { point: point.clone(), object: record.surface };
+  }
+  return nearestHit;
 }
 
 function damageFromProjectile(hit, direction) {
@@ -624,5 +655,5 @@ function resize() {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
-  panel.resize(Math.min(324, width), Math.min(680, height), Math.min(window.devicePixelRatio, 2));
+  panel.resize(Math.min(324, width), Math.min(740, height), Math.min(window.devicePixelRatio, 2));
 }
