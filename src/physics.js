@@ -445,6 +445,23 @@ export class JoltPhysics {
     return this.damageShards([index]);
   }
 
+  detachShard(index) {
+    const broken = this.damageShard(index);
+    const cluster = this.clusters.get(this.shardCluster.get(index));
+    if (!cluster || cluster.shardIndices.size <= 1) return broken;
+
+    const inherited = this.getClusterSnapshot(cluster);
+    const remaining = [...cluster.shardIndices].filter((shardIndex) => shardIndex !== index);
+    const components = this.findComponents(remaining);
+
+    this.clearPhysicalConstraints();
+    this.removeCluster(cluster);
+    this.createCluster([index], inherited);
+    for (const component of components) this.createCluster(component, inherited);
+    this.rebuildPhysicalConstraints();
+    return broken;
+  }
+
   countShardBonds(index) {
     return this.bonds.filter((bond) => bond.active && (bond.a === index || bond.b === index)).length;
   }
@@ -458,11 +475,24 @@ export class JoltPhysics {
     if (!cluster) return;
     const anchored = [...cluster.shardIndices].some((index) => this.anchorShards.has(index));
     if (cluster.anchored === anchored) return;
+
+    if (!anchored) {
+      const inherited = this.getClusterSnapshot(cluster);
+      const indices = [...cluster.shardIndices];
+      this.clearPhysicalConstraints();
+      this.removeCluster(cluster);
+      this.createCluster(indices, inherited);
+      this.rebuildPhysicalConstraints();
+      return;
+    }
+
     cluster.anchored = anchored;
-    const motion = anchored ? this.Jolt.EMotionType_Static : this.Jolt.EMotionType_Dynamic;
-    const layer = anchored ? LAYER_STATIC : LAYER_DYNAMIC;
-    this.bodyInterface.SetMotionType(cluster.bodyId, motion, this.Jolt.EActivation_Activate);
-    this.bodyInterface.SetObjectLayer(cluster.bodyId, layer);
+    this.bodyInterface.SetMotionType(
+      cluster.bodyId,
+      this.Jolt.EMotionType_Static,
+      this.Jolt.EActivation_DontActivate,
+    );
+    this.bodyInterface.SetObjectLayer(cluster.bodyId, LAYER_STATIC);
   }
 
   addImpulseToShard(index, impulse, point = null) {
@@ -612,18 +642,14 @@ export class JoltPhysics {
     }
 
     let released = 0;
+    const clustersToRelease = [];
     for (const cluster of this.clusters.values()) {
       const hasSupport = [...cluster.shardIndices].some((index) => supported.has(index));
       if (hasSupport || !cluster.anchored) continue;
-      cluster.anchored = false;
-      this.bodyInterface.SetMotionType(
-        cluster.bodyId,
-        this.Jolt.EMotionType_Dynamic,
-        this.Jolt.EActivation_Activate,
-      );
-      this.bodyInterface.SetObjectLayer(cluster.bodyId, LAYER_DYNAMIC);
+      clustersToRelease.push(cluster.id);
       released += cluster.shardIndices.size;
     }
+    for (const clusterId of clustersToRelease) this.refreshClusterMotion(clusterId);
     return { released, anchors: this.anchorShards.size };
   }
 

@@ -279,7 +279,7 @@ function onScenePointer(event) {
     || record.mesh === hit.object.parent
   ));
   const rayDir = raycaster.ray.direction.clone().normalize();
-  let brokenBonds = directRecord ? physics.damageShard(directRecord.index) : 0;
+  let brokenBonds = directRecord ? physics.detachShard(directRecord.index) : 0;
 
   const impacted = shardRecords
     .map((record) => ({ record, distance: record.mesh.position.distanceTo(hit.point) }))
@@ -325,8 +325,13 @@ function onScenePointer(event) {
     physics.releaseShard(record.index);
     const radial = record.mesh.position.clone().sub(hit.point).normalize();
     const falloff = Math.max(0.2, 1 - distance / state.impactRadius);
-    const impulse = radial.multiplyScalar(state.impactForce * falloff * 0.5)
-      .add(rayDir.clone().multiplyScalar(state.impactForce * falloff));
+    const impulse = record === directRecord
+      ? rayDir.clone().negate()
+        .add(new THREE.Vector3(0, 0.16, 0))
+        .normalize()
+        .multiplyScalar(state.impactForce)
+      : radial.multiplyScalar(state.impactForce * falloff * 0.5)
+        .add(rayDir.clone().multiplyScalar(state.impactForce * falloff));
     const clusterId = physics.getClusterIdForShard(record.index);
     const entry = clusterImpulses.get(clusterId) ?? {
       index: record.index,
