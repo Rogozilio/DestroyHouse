@@ -77,6 +77,16 @@ const pointer = new THREE.Vector2();
 const timer = new THREE.Timer();
 const loadColor = new THREE.Color();
 const insideLoadColor = new THREE.Color();
+const shardPalette = [
+  0x4fbd68,
+  0xe0b64c,
+  0xdd705c,
+  0x55a5d5,
+  0x9b7bd2,
+  0x4eb6a4,
+  0xd66f9a,
+  0xa9c957,
+].map((color) => new THREE.Color(color));
 timer.connect(document);
 
 const state = {
@@ -96,6 +106,7 @@ const state = {
   seed: 7,
   anchorBase: true,
   showJoints: true,
+  showLoadHeatmap: false,
   stats: { physics: 'loading', shards: 0, bodies: 0, joints: 0 },
 };
 
@@ -517,10 +528,14 @@ function rebuildJointLines() {
 }
 
 function updateLoadColors() {
-  const ratios = physics.getShardLoadRatios();
+  const ratios = state.showLoadHeatmap ? physics.getShardLoadRatios() : null;
   for (const record of shardRecords) {
-    const ratio = THREE.MathUtils.clamp(ratios.get(record.index) ?? 0, 0, 1);
-    loadColor.setHSL((1 - ratio) * 0.33, 0.82, 0.48);
+    if (ratios) {
+      const ratio = THREE.MathUtils.clamp(ratios.get(record.index) ?? 0, 0, 1);
+      loadColor.setHSL((1 - ratio) * 0.33, 0.82, 0.48);
+    } else {
+      loadColor.copy(shardPalette[(record.index * 5) % shardPalette.length]);
+    }
     insideLoadColor.copy(loadColor).multiplyScalar(0.48);
     const materials = Array.isArray(record.surface.material)
       ? record.surface.material

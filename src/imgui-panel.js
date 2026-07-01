@@ -45,7 +45,7 @@ export class ImGuiPanel {
     let y = 16;
     const w = 292;
     const row = 28;
-    const h = 617;
+    const h = 641;
 
     roundRect(ctx, x, y, w, h, 8, COLORS.bg, COLORS.border);
     ctx.font = '600 14px Inter, system-ui, sans-serif';
@@ -75,6 +75,8 @@ export class ImGuiPanel {
     this.checkbox(x + 14, y, 'Anchor base shards', 'anchorBase');
     y += 24;
     this.checkbox(x + 14, y, 'Show joint graph', 'showJoints');
+    y += 24;
+    this.checkbox(x + 14, y, 'Load heatmap', 'showLoadHeatmap');
     y += 27;
 
     ctx.fillStyle = COLORS.dim;
