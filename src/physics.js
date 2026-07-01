@@ -78,6 +78,7 @@ export class JoltPhysics {
     );
     settings.mLinearDamping = 0.03;
     settings.mAngularDamping = 0.12;
+    settings.mGravityFactor = 0;
     settings.mOverrideMassProperties = Jolt.EOverrideMassProperties_CalculateInertia;
     settings.mMassPropertiesOverride.mMass = mass;
 

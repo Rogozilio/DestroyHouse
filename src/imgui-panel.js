@@ -80,6 +80,10 @@ export class ImGuiPanel {
     y += 27;
 
     ctx.fillStyle = COLORS.dim;
+    ctx.font = '11px Inter, system-ui, sans-serif';
+    ctx.fillText('LMB: impact / throw', x + 14, y + 8);
+    ctx.fillText('RMB drag: rotate', x + 14, y + 22);
+    ctx.fillText('MMB drag: pan | Wheel: zoom', x + 14, y + 36);
   }
 
   slider(x, y, w, label, key, min, max, step) {

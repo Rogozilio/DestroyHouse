@@ -23,6 +23,9 @@ camera.position.set(4.4, 3.2, 5.2);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.target.set(0, 1.1, 0);
+controls.mouseButtons.LEFT = null;
+controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
 
 const hemi = new THREE.HemisphereLight(0xd8f2ff, 0x3d332c, 1.4);
 scene.add(hemi);
@@ -144,6 +147,7 @@ async function init() {
   resize();
   window.addEventListener('resize', resize);
   renderer.domElement.addEventListener('pointerdown', onScenePointer);
+  renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 
   physics = await JoltPhysics.create();
   state.stats.physics = 'ready';
@@ -319,7 +323,7 @@ function fitCamera(box) {
 }
 
 function onScenePointer(event) {
-  if (event.target !== renderer.domElement) return;
+  if (event.button !== 0 || event.target !== renderer.domElement) return;
   const rect = renderer.domElement.getBoundingClientRect();
   if (event.clientX < 324 && event.clientY < 418) return;
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
