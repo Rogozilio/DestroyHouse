@@ -109,7 +109,8 @@ const state = {
   seed: 7,
   anchorBase: true,
   showJoints: true,
-  showLoadHeatmap: false,
+  colorMode: 'shards',
+  solidColor: '#4fbd68',
   stats: { physics: 'loading', shards: 0, bodies: 0, joints: 0 },
 };
 
@@ -267,7 +268,7 @@ async function rebuild() {
     jointType: state.jointType,
   });
   physics.calibrateStructuralLoads(state.loadSafety);
-  updateLoadColors();
+  updateShardColors();
   rebuildJointLines();
 
   state.stats.shards = shardRecords.length;
@@ -565,12 +566,18 @@ function rebuildJointLines() {
   renderedJointRevision = physics.jointRevision;
 }
 
-function updateLoadColors() {
-  const ratios = state.showLoadHeatmap ? physics.getShardLoadRatios() : null;
+function updateShardColors() {
+  const ratios = state.colorMode === 'load' ? physics.getShardLoadRatios() : null;
   for (const record of shardRecords) {
     if (ratios) {
       const ratio = THREE.MathUtils.clamp(ratios.get(record.index) ?? 0, 0, 1);
       loadColor.setHSL((1 - ratio) * 0.33, 0.82, 0.48);
+    } else if (state.colorMode === 'clusters') {
+      const clusterId = physics.getClusterIdForShard(record.index) ?? 0;
+      const hue = (clusterId * 0.61803398875) % 1;
+      loadColor.setHSL(hue, 0.68, 0.52);
+    } else if (state.colorMode === 'solid') {
+      loadColor.set(state.solidColor);
     } else {
       loadColor.copy(shardPalette[(record.index * 5) % shardPalette.length]);
     }
@@ -600,7 +607,7 @@ function animate(timestamp) {
     }
     for (const record of shardRecords) physics.syncShard(record.mesh, record.index);
     updateProjectiles(timestamp);
-    updateLoadColors();
+    updateShardColors();
     updateJointLines();
   }
   renderer.render(scene, camera);

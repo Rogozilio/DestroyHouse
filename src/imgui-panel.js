@@ -19,6 +19,17 @@ export class ImGuiPanel {
     this.pointer = { x: 0, y: 0, down: false, capture: null };
     this.scale = 1;
     this.needsRefracture = false;
+    this.openDropdown = null;
+    this.colorInput = document.createElement('input');
+    this.colorInput.id = 'solid-color-input';
+    this.colorInput.type = 'color';
+    this.colorInput.value = state.solidColor;
+    this.colorInput.setAttribute('aria-label', 'Solid color');
+    document.body.append(this.colorInput);
+    this.colorInput.addEventListener('input', () => {
+      this.state.solidColor = this.colorInput.value;
+      this.draw();
+    });
 
     canvas.addEventListener('pointerdown', (event) => this.onPointer(event, true));
     window.addEventListener('pointermove', (event) => this.onPointer(event, this.pointer.down));
@@ -45,7 +56,8 @@ export class ImGuiPanel {
     let y = 16;
     const w = 292;
     const row = 28;
-    const h = 679;
+    const h = 695;
+    this.colorInput.style.display = 'none';
 
     roundRect(ctx, x, y, w, h, 8, COLORS.bg, COLORS.border);
     ctx.font = '600 14px Inter, system-ui, sans-serif';
@@ -77,14 +89,23 @@ export class ImGuiPanel {
     y += 24;
     this.checkbox(x + 14, y, 'Show joint graph', 'showJoints');
     y += 24;
-    this.checkbox(x + 14, y, 'Load heatmap', 'showLoadHeatmap');
-    y += 27;
+    y = this.dropdown(x + 14, y, w - 28, 'Color mode', [
+      { value: 'shards', label: 'Shards' },
+      { value: 'load', label: 'Load heatmap' },
+      { value: 'clusters', label: 'Clusters' },
+      { value: 'solid', label: 'Solid' },
+    ], 'colorMode');
+    y += 5;
 
-    ctx.fillStyle = COLORS.dim;
-    ctx.font = '11px Inter, system-ui, sans-serif';
-    ctx.fillText('LMB: impact / throw', x + 14, y + 8);
-    ctx.fillText('RMB drag: rotate', x + 14, y + 22);
-    ctx.fillText('MMB drag: pan | Wheel: zoom', x + 14, y + 36);
+    if (this.state.colorMode === 'solid' && !this.openDropdown) {
+      y = this.colorPicker(x + 14, y, w - 28, 'Solid color', 'solidColor');
+    } else if (!this.openDropdown) {
+      ctx.fillStyle = COLORS.dim;
+      ctx.font = '11px Inter, system-ui, sans-serif';
+      ctx.fillText('LMB: impact / throw', x + 14, y + 8);
+      ctx.fillText('RMB drag: rotate', x + 14, y + 22);
+      ctx.fillText('MMB drag: pan | Wheel: zoom', x + 14, y + 36);
+    }
   }
 
   slider(x, y, w, label, key, min, max, step) {
@@ -125,6 +146,63 @@ export class ImGuiPanel {
       this.items.push({ type: 'combo', key, value: values[i], x: x + i * segW, y: y + 18, w: segW - 4, h: 24 });
     }
     return y + 42;
+  }
+
+  dropdown(x, y, w, label, options, key) {
+    const ctx = this.ctx;
+    const selected = options.find((option) => option.value === this.state[key]) ?? options[0];
+    const fieldY = y + 18;
+
+    ctx.fillStyle = COLORS.text;
+    ctx.font = '12px Inter, system-ui, sans-serif';
+    ctx.fillText(label, x, y + 10);
+    roundRect(ctx, x, fieldY, w, 24, 5, COLORS.track, COLORS.border);
+    ctx.fillStyle = COLORS.text;
+    ctx.fillText(selected.label, x + 8, fieldY + 16);
+    ctx.beginPath();
+    ctx.moveTo(x + w - 18, fieldY + 9);
+    ctx.lineTo(x + w - 10, fieldY + 9);
+    ctx.lineTo(x + w - 14, fieldY + 14);
+    ctx.closePath();
+    ctx.fillStyle = COLORS.dim;
+    ctx.fill();
+    this.items.push({ type: 'dropdown', key, x, y: fieldY, w, h: 24 });
+
+    if (this.openDropdown === key) {
+      const optionHeight = 26;
+      const menuY = fieldY - options.length * optionHeight - 4;
+      for (let i = 0; i < options.length; i++) {
+        const option = options[i];
+        const optionY = menuY + i * optionHeight;
+        const active = option.value === this.state[key];
+        roundRect(ctx, x, optionY, w, 24, 5, active ? COLORS.accent : COLORS.panel, COLORS.border);
+        ctx.fillStyle = active ? '#07110f' : COLORS.text;
+        ctx.fillText(option.label, x + 8, optionY + 16);
+        this.items.unshift({
+          type: 'dropdown-option',
+          key,
+          value: option.value,
+          x,
+          y: optionY,
+          w,
+          h: 24,
+        });
+      }
+    }
+
+    return y + 42;
+  }
+
+  colorPicker(x, y, w, label, key) {
+    const ctx = this.ctx;
+    ctx.fillStyle = COLORS.text;
+    ctx.font = '12px Inter, system-ui, sans-serif';
+    ctx.fillText(label, x, y + 15);
+    this.colorInput.value = this.state[key];
+    this.colorInput.style.display = 'block';
+    this.colorInput.style.left = `${x + w - 54}px`;
+    this.colorInput.style.top = `${y}px`;
+    return y + 28;
   }
 
   button(x, y, w, h, label, action) {
@@ -178,6 +256,15 @@ export class ImGuiPanel {
         this.state[active.key] = active.value;
         if (active.key === 'interactionMode') this.draw();
         else this.callbacks.refracture();
+      }
+      if (active.type === 'dropdown') {
+        this.openDropdown = this.openDropdown === active.key ? null : active.key;
+        this.draw();
+      }
+      if (active.type === 'dropdown-option') {
+        this.state[active.key] = active.value;
+        this.openDropdown = null;
+        this.draw();
       }
       if (active.type === 'checkbox') {
         this.state[active.key] = !this.state[active.key];

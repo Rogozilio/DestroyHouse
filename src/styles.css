@@ -29,6 +29,19 @@ canvas {
   pointer-events: auto;
 }
 
+#solid-color-input {
+  position: fixed;
+  z-index: 4;
+  width: 54px;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 2px;
+  border: 1px solid #39414b;
+  border-radius: 5px;
+  background: #2b3139;
+  cursor: pointer;
+}
+
 #status {
   position: fixed;
   left: 18px;
