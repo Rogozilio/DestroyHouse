@@ -72,7 +72,7 @@ export class ImGuiPanel {
     y = this.combo(x + 14, y, w - 28, 'Fracture', ['voronoi', 'ridge', 'bands', 'turbulence'], 'noise') + 5;
     y = this.combo(x + 14, y, w - 28, 'Joint type', ['fixed', 'locked', 'distance'], 'jointType') + 5;
     y = this.slider(x + 14, y, w - 28, 'Target shards', 'shards', 8, 160, 1) + 4;
-    y = this.slider(x + 14, y, w - 28, 'Cluster size', 'clusterSize', 2, 24, 1) + 4;
+    y = this.slider(x + 14, y, w - 28, 'Cluster size', 'clusterSize', 1, 24, 1) + 4;
     y = this.slider(x + 14, y, w - 28, 'Joint slack', 'jointSoftness', 0, 0.35, 0.01) + 4;
     y = this.slider(x + 14, y, w - 28, 'Load safety', 'loadSafety', 1.1, 6, 0.05) + 4;
     y = this.slider(x + 14, y, w - 28, 'Failure delay', 'failureDelay', 0.05, 1, 0.05) + 4;

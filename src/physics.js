@@ -6,9 +6,29 @@ const COLLISION_SCALE = 0.34;
 
 export class JoltPhysics {
   static async create() {
-    const { default: initJolt } = await import('../vendor/jolt/jolt-physics.wasm-compat.js');
-    const Jolt = await initJolt();
-    return new JoltPhysics(Jolt);
+    // Reuse a single Jolt WASM instance across rebuilds. Instantiating a new
+    // one per reset leaks the whole module (tens of MB) and tanks the frame rate.
+    if (!JoltPhysics.module) {
+      const { default: initJolt } = await import('../vendor/jolt/jolt-physics.wasm-compat.js');
+      JoltPhysics.module = await initJolt();
+    }
+    return new JoltPhysics(JoltPhysics.module);
+  }
+
+  destroy() {
+    const Jolt = this.Jolt;
+    for (const link of this.constraints) {
+      if (link.line) link.line.visible = false;
+      this.system.RemoveConstraint(link.constraint);
+    }
+    this.constraints = [];
+    // Destroying the interface frees its physics system, bodies and shapes;
+    // the JS contact listener has to be released separately.
+    Jolt.destroy(this.jolt);
+    Jolt.destroy(this.contactListener);
+    this.jolt = null;
+    this.system = null;
+    this.bodyInterface = null;
   }
 
   constructor(Jolt) {
@@ -49,6 +69,15 @@ export class JoltPhysics {
     this.jolt = new Jolt.JoltInterface(settings);
     this.system = this.jolt.GetPhysicsSystem();
     this.system.SetGravity(new Jolt.Vec3(0, -9.8, 0));
+    // After a rebuild the freshly-placed lattice creeps a few centimetres while
+    // it settles. With the default sleep threshold that slow creep keeps all 312
+    // bodies awake for ~3.5s, solving 1020 stiff joints every frame (a big FPS
+    // dip on Reset sim). Let bodies sleep quickly once they are barely moving;
+    // impacts and broken bonds still wake them normally.
+    const physicsSettings = this.system.GetPhysicsSettings();
+    physicsSettings.mTimeBeforeSleep = 0.3;
+    physicsSettings.mPointVelocitySleepThreshold = 0.2;
+    this.system.SetPhysicsSettings(physicsSettings);
     this.bodyInterface = this.system.GetBodyInterface();
     this.installContactListener();
   }
@@ -244,7 +273,7 @@ export class JoltPhysics {
       baselineLoad: 0,
     }));
 
-    const components = this.partitionInitialClusters(Math.max(2, options.clusterSize ?? 12));
+    const components = this.partitionInitialClusters(Math.max(1, options.clusterSize ?? 12));
     for (const indices of components) this.createCluster(indices);
     this.rebuildPhysicalConstraints();
   }
@@ -469,8 +498,8 @@ export class JoltPhysics {
       settings.mAutoDetectPoint = true;
     }
 
-    settings.mNumVelocityStepsOverride = 8;
-    settings.mNumPositionStepsOverride = 4;
+    settings.mNumVelocityStepsOverride = 24;
+    settings.mNumPositionStepsOverride = 12;
     const constraint = this.bodyInterface.CreateConstraint(
       settings,
       clusterA.bodyId,

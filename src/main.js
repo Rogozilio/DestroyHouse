@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from '../vendor/three/examples/jsm/controls/OrbitControls.js';
 import { FBXLoader } from '../vendor/three/examples/jsm/loaders/FBXLoader.js';
-import { createFracture, extractTriangles, findNeighborPairs } from './fracture.js?v=10';
-import { JoltPhysics } from './physics.js?v=10';
-import { ImGuiPanel } from './imgui-panel.js?v=10';
+import { createFracture, extractTriangles, findNeighborPairs } from './fracture.js?v=23';
+import { JoltPhysics } from './physics.js?v=23';
+import { ImGuiPanel } from './imgui-panel.js?v=23';
 
 const canvas = document.querySelector('#scene');
 const uiCanvas = document.querySelector('#ui');
@@ -99,7 +99,7 @@ const state = {
   anisotropy: 1.25,
   jointType: 'locked',
   jointSoftness: 0,
-  clusterSize: 12,
+  clusterSize: 1,
   loadSafety: 2.75,
   failureDelay: 0.35,
   impactForce: 34,
@@ -125,8 +125,8 @@ let renderedJointRevision = -1;
 
 const projectileRadius = 0.16;
 const projectileLifetime = 4000;
-const projectileDamageThreshold = 5000;
-const projectileFullDamageForce = 26000;
+const projectileDamageThreshold = 1200;
+const projectileFullDamageForce = 7000;
 const projectileGeometry = new THREE.SphereGeometry(projectileRadius, 24, 16);
 const projectileMaterial = new THREE.MeshStandardMaterial({
   color: 0xe5a83f,
@@ -188,6 +188,7 @@ async function rebuild() {
   if (!source || !physics) return;
   clearProjectiles();
   clearGroups();
+  physics.destroy();
   physics = await JoltPhysics.create();
 
   const fracture = createFracture(source, state);
