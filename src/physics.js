@@ -1,8 +1,17 @@
 import * as THREE from 'three';
 
-const LAYER_STATIC = 0;
-const LAYER_DYNAMIC = 1;
-const COLLISION_SCALE = 0.55;
+const LAYER_FLOOR = 0;
+const LAYER_CORE = 1;
+const LAYER_SHELL = 2;
+const LAYER_PROJECTILE = 3;
+const OBJECT_LAYERS = 4;
+const BP_STATIC = 0;
+const BP_MOVING = 1;
+// Convex hulls are shrunk slightly toward each shard's centre so neighbouring
+// cells keep a small gap in the intact structure (otherwise every touching face
+// spawns a contact and the packed lattice grinds to a halt). Detached pieces
+// still collide with a near-correct shape.
+const HULL_SCALE = 0.95;
 
 export class JoltPhysics {
   static async create() {
@@ -49,15 +58,25 @@ export class JoltPhysics {
     this.projectileContacts = [];
     this.stepDuration = 1 / 60;
 
-    const objectFilter = new Jolt.ObjectLayerPairFilterTable(2);
-    objectFilter.EnableCollision(LAYER_STATIC, LAYER_DYNAMIC);
-    objectFilter.EnableCollision(LAYER_DYNAMIC, LAYER_DYNAMIC);
+    const objectFilter = new Jolt.ObjectLayerPairFilterTable(OBJECT_LAYERS);
+    objectFilter.EnableCollision(LAYER_FLOOR, LAYER_CORE);
+    objectFilter.EnableCollision(LAYER_FLOOR, LAYER_SHELL);
+    objectFilter.EnableCollision(LAYER_FLOOR, LAYER_PROJECTILE);
+    objectFilter.EnableCollision(LAYER_CORE, LAYER_CORE);
+    objectFilter.EnableCollision(LAYER_CORE, LAYER_PROJECTILE);
+    objectFilter.EnableCollision(LAYER_SHELL, LAYER_SHELL);
+    objectFilter.EnableCollision(LAYER_SHELL, LAYER_PROJECTILE);
+    // Core and shell overlap at the skin/core interface and are held together by
+    // joints, so they must NOT collide with each other - colliding the overlap
+    // blows the structure apart.
 
-    const bpInterface = new Jolt.BroadPhaseLayerInterfaceTable(2, 2);
-    bpInterface.MapObjectToBroadPhaseLayer(LAYER_STATIC, new Jolt.BroadPhaseLayer(LAYER_STATIC));
-    bpInterface.MapObjectToBroadPhaseLayer(LAYER_DYNAMIC, new Jolt.BroadPhaseLayer(LAYER_DYNAMIC));
+    const bpInterface = new Jolt.BroadPhaseLayerInterfaceTable(OBJECT_LAYERS, 2);
+    bpInterface.MapObjectToBroadPhaseLayer(LAYER_FLOOR, new Jolt.BroadPhaseLayer(BP_STATIC));
+    bpInterface.MapObjectToBroadPhaseLayer(LAYER_CORE, new Jolt.BroadPhaseLayer(BP_MOVING));
+    bpInterface.MapObjectToBroadPhaseLayer(LAYER_SHELL, new Jolt.BroadPhaseLayer(BP_MOVING));
+    bpInterface.MapObjectToBroadPhaseLayer(LAYER_PROJECTILE, new Jolt.BroadPhaseLayer(BP_MOVING));
 
-    const objectVsBroadPhase = new Jolt.ObjectVsBroadPhaseLayerFilterTable(bpInterface, 2, objectFilter, 2);
+    const objectVsBroadPhase = new Jolt.ObjectVsBroadPhaseLayerFilterTable(bpInterface, 2, objectFilter, OBJECT_LAYERS);
     const settings = new Jolt.JoltSettings();
     settings.mMaxBodies = 4096;
     settings.mMaxBodyPairs = 8192;
@@ -192,7 +211,7 @@ export class JoltPhysics {
       new Jolt.RVec3(0, y - 0.08, 0),
       Jolt.Quat.prototype.sIdentity(),
       Jolt.EMotionType_Static,
-      LAYER_STATIC,
+      LAYER_FLOOR,
     );
     const createdId = this.bodyInterface.CreateAndAddBody(settings, Jolt.EActivation_DontActivate);
     const id = new Jolt.BodyID(createdId.GetIndexAndSequenceNumber());
@@ -209,7 +228,7 @@ export class JoltPhysics {
       new Jolt.RVec3(position.x, position.y, position.z),
       Jolt.Quat.prototype.sIdentity(),
       Jolt.EMotionType_Dynamic,
-      LAYER_DYNAMIC,
+      LAYER_PROJECTILE,
     );
     settings.mLinearDamping = 0.03;
     settings.mAngularDamping = 0.12;
@@ -252,7 +271,9 @@ export class JoltPhysics {
       index,
       center: shard.center.clone(),
       half: shard.half.clone(),
+      points: this.extractHullPoints(shard.geometry),
       mass: Math.max(0.15, shard.mass),
+      layer: shard.layer ?? 'core',
       y: shard.center.y,
     }));
     this.anchorShards = new Set(anchorIndices);
@@ -265,6 +286,7 @@ export class JoltPhysics {
       a: pair.a,
       b: pair.b,
       distance: pair.distance,
+      strength: pair.strength ?? 'core',
       active: true,
       load: 0,
       loadRatio: 0,
@@ -301,7 +323,11 @@ export class JoltPhysics {
 
         const neighbors = (adjacency.get(current) ?? [])
           .map((edge) => edge.neighbor)
-          .filter((neighbor) => unassigned.has(neighbor) && !queued.has(neighbor))
+          // Keep clusters pure to one layer: a compound body mixing core and
+          // shell shards would put overlapping shell pieces on the core
+          // collision layer, so they fight the joints and the structure shakes.
+          .filter((neighbor) => unassigned.has(neighbor) && !queued.has(neighbor)
+            && this.shards[neighbor].layer === this.shards[seed].layer)
           .sort((a, b) => this.shards[current].center.distanceToSquared(this.shards[a].center)
             - this.shards[current].center.distanceToSquared(this.shards[b].center));
         for (const neighbor of neighbors) {
@@ -314,6 +340,51 @@ export class JoltPhysics {
     }
 
     return components;
+  }
+
+  // Deduplicated local vertices of a shard, used to build a convex-hull collider
+  // that matches the Voronoi cell instead of a coarse box.
+  extractHullPoints(geometry) {
+    const pos = geometry?.attributes?.position;
+    if (!pos) return null;
+    const seen = new Set();
+    const points = [];
+    for (let v = 0; v < pos.count; v++) {
+      const x = pos.getX(v);
+      const y = pos.getY(v);
+      const z = pos.getZ(v);
+      const key = `${Math.round(x * 1000)},${Math.round(y * 1000)},${Math.round(z * 1000)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      points.push(x, y, z);
+    }
+    return points.length >= 12 ? points : null;
+  }
+
+  // Convex hull matching the shard's real shape, so detached pieces rest against
+  // each other instead of passing through. Falls back to a box if the hull is
+  // degenerate.
+  makeShardShape(shard) {
+    const Jolt = this.Jolt;
+    if (shard.points) {
+      const hull = new Jolt.ConvexHullShapeSettings();
+      hull.mMaxConvexRadius = 0.001;
+      for (let i = 0; i < shard.points.length; i += 3) {
+        hull.mPoints.push_back(new Jolt.Vec3(
+          shard.points[i] * HULL_SCALE,
+          shard.points[i + 1] * HULL_SCALE,
+          shard.points[i + 2] * HULL_SCALE,
+        ));
+      }
+      const result = hull.Create();
+      if (result.IsValid()) return result.Get();
+    }
+    const half = new Jolt.Vec3(
+      Math.max(0.03, shard.half.x * 0.9),
+      Math.max(0.03, shard.half.y * 0.9),
+      Math.max(0.03, shard.half.z * 0.9),
+    );
+    return new Jolt.BoxShape(half, 0.01, null);
   }
 
   createCluster(shardIndices, inherited = null) {
@@ -341,16 +412,11 @@ export class JoltPhysics {
       const shard = this.shards[index];
       const local = worldPositions.get(index).clone().sub(center).applyQuaternion(inverse);
       localOffsets.set(index, local);
-      const half = new Jolt.Vec3(
-        Math.max(0.03, shard.half.x * COLLISION_SCALE),
-        Math.max(0.03, shard.half.y * COLLISION_SCALE),
-        Math.max(0.03, shard.half.z * COLLISION_SCALE),
-      );
-      const box = new Jolt.BoxShapeSettings(half, 0.015, null);
-      compound.AddShape(
+      const shape = this.makeShardShape(shard);
+      compound.AddShapeShape(
         new Jolt.Vec3(local.x, local.y, local.z),
         identity,
-        box,
+        shape,
         index,
       );
     }
@@ -366,7 +432,8 @@ export class JoltPhysics {
       0,
     );
     const motion = anchored ? Jolt.EMotionType_Static : Jolt.EMotionType_Dynamic;
-    const layer = anchored ? LAYER_STATIC : LAYER_DYNAMIC;
+    const isShell = shardIndices.every((index) => this.shards[index].layer === 'shell');
+    const layer = isShell ? LAYER_SHELL : LAYER_CORE;
     const settings = new Jolt.BodyCreationSettings(
       shape,
       new Jolt.RVec3(center.x, center.y, center.z),
@@ -404,6 +471,7 @@ export class JoltPhysics {
       shardIndices: new Set(shardIndices),
       localOffsets,
       anchored,
+      layer,
       shape,
       center,
     };
@@ -624,6 +692,35 @@ export class JoltPhysics {
     return broken;
   }
 
+  // Force needed to snap a bond of each layer. A weak hit only clears the shell,
+  // a stronger one also tears the skin off the core, and a hard one breaks the
+  // structural core itself.
+  static BREAK_FORCE = { shell: 4, attach: 16, core: 40 };
+
+  // Break only the bonds (touching `indices`) that the applied force can
+  // overcome, so hit strength selects how deep the damage goes.
+  damageShardsByForce(indices, force) {
+    const targets = new Set(indices);
+    const affectedClusters = new Set();
+    let broken = 0;
+
+    for (const bond of this.bonds) {
+      if (!bond.active || (!targets.has(bond.a) && !targets.has(bond.b))) continue;
+      if (force < (JoltPhysics.BREAK_FORCE[bond.strength] ?? JoltPhysics.BREAK_FORCE.core)) continue;
+      bond.active = false;
+      bond.load = 0;
+      bond.loadRatio = 0;
+      broken++;
+      const aCluster = this.shardCluster.get(bond.a);
+      const bCluster = this.shardCluster.get(bond.b);
+      if (aCluster != null) affectedClusters.add(aCluster);
+      if (bCluster != null) affectedClusters.add(bCluster);
+    }
+
+    if (broken > 0) this.splitClusters(affectedClusters);
+    return broken;
+  }
+
   damageShard(index) {
     return this.damageShards([index]);
   }
@@ -675,7 +772,9 @@ export class JoltPhysics {
       this.Jolt.EMotionType_Static,
       this.Jolt.EActivation_DontActivate,
     );
-    this.bodyInterface.SetObjectLayer(cluster.bodyId, LAYER_STATIC);
+    // Keep the body on its own collision layer (core/shell); only the motion type
+    // changes when it re-anchors.
+    this.bodyInterface.SetObjectLayer(cluster.bodyId, cluster.layer);
   }
 
   addImpulseToShard(index, impulse, point = null) {

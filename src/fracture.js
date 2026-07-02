@@ -68,6 +68,34 @@ export function extractTriangles(root) {
   return { triangles, bounds, material, geometry };
 }
 
+// A copy of the source shrunk inward by `inset` world units, used to fracture
+// the structural core that sits just inside the surface shell.
+export function insetSource(source, inset) {
+  const center = source.bounds.getCenter(new THREE.Vector3());
+  const size = source.bounds.getSize(new THREE.Vector3());
+  const scale = new THREE.Vector3(
+    Math.max(0.1, (size.x - 2 * inset) / Math.max(size.x, 1e-4)),
+    Math.max(0.1, (size.y - 2 * inset) / Math.max(size.y, 1e-4)),
+    Math.max(0.1, (size.z - 2 * inset) / Math.max(size.z, 1e-4)),
+  );
+  const geometry = source.geometry.clone();
+  const pos = geometry.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setX(i, center.x + (pos.getX(i) - center.x) * scale.x);
+    pos.setY(i, center.y + (pos.getY(i) - center.y) * scale.y);
+    pos.setZ(i, center.z + (pos.getZ(i) - center.z) * scale.z);
+  }
+  pos.needsUpdate = true;
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return {
+    triangles: source.triangles,
+    bounds: geometry.boundingBox.clone(),
+    material: source.material,
+    geometry,
+  };
+}
+
 export function createFracture(source, options) {
   const { triangles, bounds, geometry } = source;
   if (triangles.length < 8 || bounds.isEmpty() || !geometry?.attributes?.position) {

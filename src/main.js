@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from '../vendor/three/examples/jsm/controls/OrbitControls.js';
 import { FBXLoader } from '../vendor/three/examples/jsm/loaders/FBXLoader.js';
-import { createFracture, extractTriangles, findNeighborPairs } from './fracture.js?v=24';
-import { JoltPhysics } from './physics.js?v=24';
-import { ImGuiPanel } from './imgui-panel.js?v=24';
+import { createFracture, extractTriangles, findNeighborPairs, insetSource } from './fracture.js?v=34';
+import { JoltPhysics } from './physics.js?v=34';
+import { ImGuiPanel } from './imgui-panel.js?v=34';
 
 const canvas = document.querySelector('#scene');
 const uiCanvas = document.querySelector('#ui');
@@ -184,6 +184,54 @@ async function init() {
   animate();
 }
 
+// Two layers: the structural core is the wall fractured coarsely; the shell is
+// a thin skin pushed OUTWARD from the wall and fractured finely, so it wraps the
+// core without overlapping it. Bonds carry a `strength` so weak hits only shed
+// the shell and hard hits reach the core.
+function buildLayeredTemplate() {
+  const houseSize = source.bounds.getSize(new THREE.Vector3());
+  const shellThickness = Math.max(0.05, Math.min(houseSize.x, houseSize.y, houseSize.z) * 0.05);
+
+  const core = createFracture(source, {
+    ...state,
+    shards: Math.max(8, Math.round(state.shards * 0.55)),
+  });
+  const shell = createFracture(insetSource(source, -shellThickness), {
+    ...state,
+    shards: Math.max(8, Math.round(state.shards * 0.9)),
+  });
+
+  const shards = [];
+  for (const shard of core.shards) shards.push({ ...shard, layer: 'core' });
+  const coreCount = shards.length;
+  for (const shard of shell.shards) shards.push({ ...shard, layer: 'shell' });
+  shards.forEach((shard, i) => { shard.index = i; });
+
+  const pairs = [];
+  for (const p of findNeighborPairs(core.shards, core.bounds, Math.floor(core.shards.length * 3.5))) {
+    pairs.push({ a: p.a, b: p.b, distance: p.distance, strength: 'core' });
+  }
+  for (const p of findNeighborPairs(shell.shards, shell.bounds, Math.floor(shell.shards.length * 3.5))) {
+    pairs.push({ a: p.a + coreCount, b: p.b + coreCount, distance: p.distance, strength: 'shell' });
+  }
+  // Attach each shell shard to its nearest core shard so the skin stays on until
+  // it is knocked off.
+  for (let si = 0; si < shell.shards.length; si++) {
+    const sc = shell.shards[si].center;
+    let best = -1;
+    let bestDistanceSq = Infinity;
+    for (let ci = 0; ci < core.shards.length; ci++) {
+      const d = sc.distanceToSquared(core.shards[ci].center);
+      if (d < bestDistanceSq) { bestDistanceSq = d; best = ci; }
+    }
+    if (best >= 0) {
+      pairs.push({ a: best, b: coreCount + si, distance: Math.sqrt(bestDistanceSq), strength: 'attach' });
+    }
+  }
+
+  return { shards, pairs, mode: `layered (${core.shards.length} core + ${shell.shards.length} shell)` };
+}
+
 async function rebuild() {
   if (!source || !physics) return;
   clearProjectiles();
@@ -191,21 +239,17 @@ async function rebuild() {
   physics.destroy();
   physics = await JoltPhysics.create();
 
-  const fracture = createFracture(source, state);
+  const template = buildLayeredTemplate();
+  const fracture = { mode: template.mode };
   bounds = new THREE.Box3();
   for (const offset of houseOffsets) bounds.union(source.bounds.clone().translate(offset));
 
   const allShards = [];
   const allPairs = [];
-  const basePairs = findNeighborPairs(
-    fracture.shards,
-    fracture.bounds,
-    Math.floor(fracture.shards.length * 3.5),
-  );
   for (let houseIndex = 0; houseIndex < houseOffsets.length; houseIndex++) {
     const shardOffset = allShards.length;
     const offset = houseOffsets[houseIndex];
-    for (const shard of fracture.shards) {
+    for (const shard of template.shards) {
       allShards.push({
         ...shard,
         index: allShards.length,
@@ -214,9 +258,10 @@ async function rebuild() {
         bounds: shard.bounds.clone().translate(offset),
         seed: shard.seed.clone().add(offset),
         half: shard.half.clone(),
+        layer: shard.layer,
       });
     }
-    for (const pair of basePairs) {
+    for (const pair of template.pairs) {
       allPairs.push({
         ...pair,
         a: pair.a + shardOffset,
@@ -248,7 +293,8 @@ async function rebuild() {
     mesh.position.copy(shard.center);
     shardGroup.add(mesh);
 
-    const isAnchor = state.anchorBase && shard.center.y < bounds.min.y + size.y * 0.13;
+    const isAnchor = state.anchorBase && shard.layer === 'core'
+      && shard.center.y < bounds.min.y + size.y * 0.13;
     mesh.userData.shard = shard;
     return {
       index: shard.index,
@@ -371,7 +417,7 @@ function onScenePointer(event) {
     || record.mesh === hit.object.parent
   ));
   const rayDir = raycaster.ray.direction.clone().normalize();
-  let brokenBonds = directRecord ? physics.detachShard(directRecord.index) : 0;
+  let brokenBonds = 0;
 
   const impacted = shardRecords
     .map((record) => ({ record, distance: record.mesh.position.distanceTo(hit.point) }))
@@ -405,12 +451,12 @@ function onScenePointer(event) {
     impacted.push(nearest);
   }
 
-  if (foundationHit) {
-    const damagedAnchors = impacted
-      .filter(({ record }) => record.isAnchor)
-      .map(({ record }) => record.index);
-    brokenBonds += physics.damageShards(damagedAnchors);
-  }
+  // Force-graded damage: a weak hit only snaps shell bonds (skin chips off), a
+  // stronger one tears the skin off the core, a hard one breaks the core too.
+  brokenBonds = physics.damageShardsByForce(
+    impacted.map(({ record }) => record.index),
+    state.impactForce,
+  );
 
   const clusterImpulses = new Map();
   for (const { record, distance } of impacted) {
@@ -513,8 +559,13 @@ function damageFromProjectile(contact) {
     impacted.unshift({ record: directRecord, distance: 0 });
   }
 
-  let brokenBonds = physics.damageShards(impacted.map(({ record }) => record.index));
-  brokenBonds += physics.detachShard(directRecord.index);
+  // Map the contact force (newtons) onto the same scale as the impact slider so
+  // the layer-break thresholds apply: a light ball only sheds the shell.
+  const mappedForce = contact.force / 300;
+  let brokenBonds = physics.damageShardsByForce(
+    impacted.map(({ record }) => record.index),
+    mappedForce,
+  );
   for (const { record } of impacted) {
     physics.releaseShard(record.index);
   }
@@ -579,6 +630,8 @@ function updateShardColors() {
       loadColor.setHSL(hue, 0.68, 0.52);
     } else if (state.colorMode === 'solid') {
       loadColor.set(state.solidColor);
+    } else if (record.shard.layer === 'core') {
+      loadColor.set(0x3b4046); // dark structural core, revealed as the shell chips off
     } else {
       loadColor.copy(shardPalette[(record.index * 5) % shardPalette.length]);
     }
