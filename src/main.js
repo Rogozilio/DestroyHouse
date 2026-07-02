@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from '../vendor/three/examples/jsm/controls/OrbitControls.js';
 import { FBXLoader } from '../vendor/three/examples/jsm/loaders/FBXLoader.js';
-import { createFracture, extractTriangles, findNeighborPairs } from './fracture.js?v=23';
-import { JoltPhysics } from './physics.js?v=23';
-import { ImGuiPanel } from './imgui-panel.js?v=23';
+import { createFracture, extractTriangles, findNeighborPairs } from './fracture.js?v=24';
+import { JoltPhysics } from './physics.js?v=24';
+import { ImGuiPanel } from './imgui-panel.js?v=24';
 
 const canvas = document.querySelector('#scene');
 const uiCanvas = document.querySelector('#ui');
@@ -102,7 +102,7 @@ const state = {
   clusterSize: 1,
   loadSafety: 2.75,
   failureDelay: 0.35,
-  impactForce: 34,
+  impactForce: 16,
   impactRadius: 0.72,
   ballSpeed: 30,
   density: 1,
@@ -418,11 +418,11 @@ function onScenePointer(event) {
     const radial = record.mesh.position.clone().sub(hit.point).normalize();
     const falloff = Math.max(0.2, 1 - distance / state.impactRadius);
     const impulse = record === directRecord
-      ? rayDir.clone().negate()
-        .add(new THREE.Vector3(0, 0.16, 0))
+      ? rayDir.clone()
+        .add(new THREE.Vector3(0, 0.1, 0))
         .normalize()
         .multiplyScalar(state.impactForce)
-      : radial.multiplyScalar(state.impactForce * falloff * 0.5)
+      : radial.multiplyScalar(state.impactForce * falloff * 0.2)
         .add(rayDir.clone().multiplyScalar(state.impactForce * falloff));
     const clusterId = physics.getClusterIdForShard(record.index);
     const entry = clusterImpulses.get(clusterId) ?? {

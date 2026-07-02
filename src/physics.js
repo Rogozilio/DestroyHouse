@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 const LAYER_STATIC = 0;
 const LAYER_DYNAMIC = 1;
-const COLLISION_SCALE = 0.34;
+const COLLISION_SCALE = 0.55;
 
 export class JoltPhysics {
   static async create() {
@@ -196,7 +196,7 @@ export class JoltPhysics {
     );
     const createdId = this.bodyInterface.CreateAndAddBody(settings, Jolt.EActivation_DontActivate);
     const id = new Jolt.BodyID(createdId.GetIndexAndSequenceNumber());
-    this.bodyInterface.SetFriction(id, 0.9);
+    this.bodyInterface.SetFriction(id, 0.96);
     this.bodyInterface.SetRestitution(id, 0);
     return id;
   }
@@ -374,8 +374,8 @@ export class JoltPhysics {
       motion,
       layer,
     );
-    settings.mLinearDamping = 0.18;
-    settings.mAngularDamping = 0.88;
+    settings.mLinearDamping = 0.32;
+    settings.mAngularDamping = 0.9;
     settings.mMaxAngularVelocity = 3;
     settings.mOverrideMassProperties = Jolt.EOverrideMassProperties_CalculateInertia;
     settings.mMassPropertiesOverride.mMass = Math.max(10, clusterMass * 10);
@@ -385,7 +385,7 @@ export class JoltPhysics {
       anchored ? Jolt.EActivation_DontActivate : Jolt.EActivation_Activate,
     );
     const bodyId = new Jolt.BodyID(createdId.GetIndexAndSequenceNumber());
-    this.bodyInterface.SetFriction(bodyId, 0.82);
+    this.bodyInterface.SetFriction(bodyId, 0.96);
     this.bodyInterface.SetRestitution(bodyId, 0);
 
     if (!anchored && inherited) {
