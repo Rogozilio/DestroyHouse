@@ -24,6 +24,10 @@ export class JoltPhysics {
     this.jointRevision = 0;
     this.jointType = 'locked';
     this.jointSoftness = 0;
+    this.projectileBodies = new Map();
+    this.clusterBodies = new Map();
+    this.projectileContacts = [];
+    this.stepDuration = 1 / 60;
 
     const objectFilter = new Jolt.ObjectLayerPairFilterTable(2);
     objectFilter.EnableCollision(LAYER_STATIC, LAYER_DYNAMIC);
@@ -46,6 +50,108 @@ export class JoltPhysics {
     this.system = this.jolt.GetPhysicsSystem();
     this.system.SetGravity(new Jolt.Vec3(0, -9.8, 0));
     this.bodyInterface = this.system.GetBodyInterface();
+    this.installContactListener();
+  }
+
+  getBodyKey(bodyId) {
+    return bodyId.GetIndexAndSequenceNumber();
+  }
+
+  installContactListener() {
+    const Jolt = this.Jolt;
+    this.contactListener = new Jolt.ContactListenerJS();
+    this.contactListener.OnContactValidate = () => (
+      Jolt.ValidateResult_AcceptAllContactsForThisBodyPair
+    );
+    this.contactListener.OnContactAdded = (
+      body1Pointer,
+      body2Pointer,
+      manifoldPointer,
+    ) => {
+      this.recordProjectileContact(body1Pointer, body2Pointer, manifoldPointer);
+    };
+    this.contactListener.OnContactPersisted = () => {};
+    this.contactListener.OnContactRemoved = () => {};
+    this.system.SetContactListener(this.contactListener);
+  }
+
+  recordProjectileContact(body1Pointer, body2Pointer, manifoldPointer) {
+    const Jolt = this.Jolt;
+    const body1 = Jolt.wrapPointer(body1Pointer, Jolt.Body);
+    const body2 = Jolt.wrapPointer(body2Pointer, Jolt.Body);
+    const body1Key = this.getBodyKey(body1.GetID());
+    const body2Key = this.getBodyKey(body2.GetID());
+    const projectileIsBody1 = this.projectileBodies.has(body1Key);
+    const projectileIsBody2 = this.projectileBodies.has(body2Key);
+    if (projectileIsBody1 === projectileIsBody2) return;
+
+    const projectileBody = projectileIsBody1 ? body1 : body2;
+    const targetBody = projectileIsBody1 ? body2 : body1;
+    const projectileBodyKey = projectileIsBody1 ? body1Key : body2Key;
+    const targetBodyKey = projectileIsBody1 ? body2Key : body1Key;
+    if (!this.clusterBodies.has(targetBodyKey)) return;
+
+    const manifold = Jolt.wrapPointer(manifoldPointer, Jolt.ContactManifold);
+    const targetPoints = projectileIsBody1
+      ? manifold.get_mRelativeContactPointsOn2()
+      : manifold.get_mRelativeContactPointsOn1();
+    if (targetPoints.size() === 0) return;
+
+    const point = projectileIsBody1
+      ? manifold.GetWorldSpaceContactPointOn2(0)
+      : manifold.GetWorldSpaceContactPointOn1(0);
+    // Jolt's WASM getters reuse temporary vector storage, so copy every value
+    // before calling another getter that returns the same vector type.
+    const pointValues = [point.GetX(), point.GetY(), point.GetZ()];
+    const normal = manifold.get_mWorldSpaceNormal();
+    const normalValues = [normal.GetX(), normal.GetY(), normal.GetZ()];
+    const projectileVelocity = projectileBody.GetLinearVelocity();
+    const projectileVelocityValues = [
+      projectileVelocity.GetX(),
+      projectileVelocity.GetY(),
+      projectileVelocity.GetZ(),
+    ];
+    const targetVelocity = targetBody.GetLinearVelocity();
+    const targetVelocityValues = [
+      targetVelocity.GetX(),
+      targetVelocity.GetY(),
+      targetVelocity.GetZ(),
+    ];
+    const relativeNormalSpeed = Math.abs(
+      (projectileVelocityValues[0] - targetVelocityValues[0]) * normalValues[0]
+      + (projectileVelocityValues[1] - targetVelocityValues[1]) * normalValues[1]
+      + (projectileVelocityValues[2] - targetVelocityValues[2]) * normalValues[2],
+    );
+    if (relativeNormalSpeed <= 1e-3) return;
+
+    const projectileMass = this.projectileBodies.get(projectileBodyKey).mass;
+    const targetInverseMass = targetBody.IsDynamic()
+      ? targetBody.GetMotionProperties().GetInverseMass()
+      : 0;
+    // The JS binding does not expose the solver's final contact impulse.
+    // Estimate it from closing speed and reduced mass, then derive average force.
+    const reducedMass = 1 / (1 / projectileMass + targetInverseMass);
+    const impulse = reducedMass * relativeNormalSpeed;
+    const force = impulse / Math.max(this.stepDuration, 1 / 240);
+    const targetSubShape = projectileIsBody1
+      ? manifold.get_mSubShapeID2()
+      : manifold.get_mSubShapeID1();
+    const shardIndex = targetBody.GetShape().GetSubShapeUserData(targetSubShape);
+
+    this.projectileContacts.push({
+      projectileBodyKey,
+      shardIndex,
+      point: new THREE.Vector3(...pointValues),
+      relativeNormalSpeed,
+      impulse,
+      force,
+    });
+  }
+
+  drainProjectileContacts() {
+    const contacts = this.projectileContacts;
+    this.projectileContacts = [];
+    return contacts;
   }
 
   addFloor(y, radius) {
@@ -78,6 +184,7 @@ export class JoltPhysics {
     );
     settings.mLinearDamping = 0.03;
     settings.mAngularDamping = 0.12;
+    settings.mMotionQuality = Jolt.EMotionQuality_LinearCast;
     settings.mOverrideMassProperties = Jolt.EOverrideMassProperties_CalculateInertia;
     settings.mMassPropertiesOverride.mMass = mass;
 
@@ -89,11 +196,17 @@ export class JoltPhysics {
       bodyId,
       new Jolt.Vec3(velocity.x, velocity.y, velocity.z),
     );
+    this.projectileBodies.set(this.getBodyKey(bodyId), { mass });
     return bodyId;
   }
 
   removeBody(bodyId) {
     if (!bodyId) return;
+    const bodyKey = this.getBodyKey(bodyId);
+    this.projectileBodies.delete(bodyKey);
+    this.projectileContacts = this.projectileContacts.filter(
+      (contact) => contact.projectileBodyKey !== bodyKey,
+    );
     this.bodyInterface.RemoveBody(bodyId);
     this.bodyInterface.DestroyBody(bodyId);
   }
@@ -266,12 +379,14 @@ export class JoltPhysics {
       center,
     };
     this.clusters.set(cluster.id, cluster);
+    this.clusterBodies.set(this.getBodyKey(bodyId), cluster.id);
     for (const index of shardIndices) this.shardCluster.set(index, cluster.id);
     return cluster;
   }
 
   removeCluster(cluster) {
     if (!cluster) return;
+    this.clusterBodies.delete(this.getBodyKey(cluster.bodyId));
     this.bodyInterface.RemoveBody(cluster.bodyId);
     this.bodyInterface.DestroyBody(cluster.bodyId);
     this.clusters.delete(cluster.id);
@@ -693,7 +808,8 @@ export class JoltPhysics {
   }
 
   step(dt, substeps = 2) {
-    this.jolt.Step(Math.min(dt, 1 / 20), substeps);
+    this.stepDuration = Math.min(dt, 1 / 20);
+    this.jolt.Step(this.stepDuration, substeps);
   }
 
   syncShard(mesh, index) {

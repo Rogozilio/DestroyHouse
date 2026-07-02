@@ -75,9 +75,6 @@ const projectileGroup = new THREE.Group();
 scene.add(shardGroup, jointGroup, ghostGroup, projectileGroup);
 
 const raycaster = new THREE.Raycaster();
-const projectileRaycaster = new THREE.Raycaster();
-const projectileHitBox = new THREE.Box3();
-const projectileHitPoint = new THREE.Vector3();
 const pointer = new THREE.Vector2();
 const timer = new THREE.Timer();
 const loadColor = new THREE.Color();
@@ -127,6 +124,8 @@ let renderedJointRevision = -1;
 
 const projectileRadius = 0.16;
 const projectileLifetime = 4000;
+const projectileDamageThreshold = 5000;
+const projectileFullDamageForce = 26000;
 const projectileGeometry = new THREE.SphereGeometry(projectileRadius, 24, 16);
 const projectileMaterial = new THREE.MeshStandardMaterial({
   color: 0xe5a83f,
@@ -450,16 +449,16 @@ function spawnProjectile(ray) {
   const direction = ray.direction.clone().normalize();
   const position = camera.position.clone().addScaledVector(direction, projectileRadius + 0.42);
   const velocity = direction.clone().multiplyScalar(state.ballSpeed);
+  const bodyId = physics.addSphere(position, projectileRadius, 5.5, velocity);
   const mesh = new THREE.Mesh(projectileGeometry, projectileMaterial);
   mesh.position.copy(position);
   mesh.castShadow = true;
   projectileGroup.add(mesh);
 
   projectiles.push({
-    bodyId: physics.addSphere(position, projectileRadius, 5.5, velocity),
+    bodyId,
+    bodyKey: physics.getBodyKey(bodyId),
     mesh,
-    direction: direction.clone(),
-    previousPosition: position.clone(),
     expiresAt: performance.now() + projectileLifetime,
     hasDamaged: false,
   });
@@ -467,69 +466,45 @@ function spawnProjectile(ray) {
 }
 
 function updateProjectiles(timestamp) {
+  const contacts = physics.drainProjectileContacts()
+    .sort((a, b) => b.force - a.force);
+  for (const contact of contacts) {
+    const projectile = projectiles.find(
+      (candidate) => candidate.bodyKey === contact.projectileBodyKey,
+    );
+    if (!projectile || projectile.hasDamaged) continue;
+    projectile.hasDamaged = damageFromProjectile(contact);
+  }
+
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const projectile = projectiles[i];
     physics.syncBody(projectile.mesh, projectile.bodyId);
-
-    if (!projectile.hasDamaged) {
-      const travel = projectile.mesh.position.clone().sub(projectile.previousPosition);
-      const distance = travel.length();
-      const sweepDirection = distance > 1e-5
-        ? travel.multiplyScalar(1 / distance)
-        : projectile.direction;
-      const hit = findProjectileHit(
-        projectile.previousPosition,
-        sweepDirection,
-        distance,
-      );
-      if (hit) {
-        damageFromProjectile(hit, projectile.direction);
-        projectile.hasDamaged = true;
-      }
-      projectile.previousPosition.copy(projectile.mesh.position);
-    }
 
     if (timestamp >= projectile.expiresAt) removeProjectile(i);
   }
 }
 
-function findProjectileHit(origin, direction, distance) {
-  const sweepDistance = Math.max(
-    projectileRadius * 2,
-    distance + projectileRadius * 1.5,
-  );
-  projectileRaycaster.ray.origin.copy(origin);
-  projectileRaycaster.ray.direction.copy(direction);
-  projectileRaycaster.near = 0;
-  projectileRaycaster.far = sweepDistance;
-
-  const exactHit = projectileRaycaster.intersectObjects(
-    shardRecords.map((record) => record.surface),
-    false,
-  )[0];
-  if (exactHit) return exactHit;
-
-  let nearestDistance = Infinity;
-  let nearestHit = null;
-  for (const record of shardRecords) {
-    projectileHitBox.setFromObject(record.surface).expandByScalar(projectileRadius * 1.15);
-    const point = projectileRaycaster.ray.intersectBox(projectileHitBox, projectileHitPoint);
-    if (!point) continue;
-    const hitDistance = point.distanceTo(origin);
-    if (hitDistance > sweepDistance || hitDistance >= nearestDistance) continue;
-    nearestDistance = hitDistance;
-    nearestHit = { point: point.clone(), object: record.surface };
+function damageFromProjectile(contact) {
+  const directRecord = shardRecords.find((record) => record.index === contact.shardIndex);
+  if (!directRecord) return false;
+  if (contact.force < projectileDamageThreshold) {
+    status.textContent = `Ball contact ${(contact.force / 1000).toFixed(1)} kN: below damage threshold.`;
+    return false;
   }
-  return nearestHit;
-}
 
-function damageFromProjectile(hit, direction) {
-  const directRecord = shardRecords.find((record) => record.surface === hit.object);
-  if (!directRecord) return;
-
-  const damageRadius = Math.max(projectileRadius * 2, state.impactRadius * 0.8);
+  const forceRatio = THREE.MathUtils.clamp(
+    (contact.force - projectileDamageThreshold)
+      / (projectileFullDamageForce - projectileDamageThreshold),
+    0,
+    1,
+  );
+  const damageRadius = THREE.MathUtils.lerp(
+    projectileRadius * 2,
+    Math.max(projectileRadius * 2, state.impactRadius * 0.8),
+    forceRatio,
+  );
   const impacted = shardRecords
-    .map((record) => ({ record, distance: record.mesh.position.distanceTo(hit.point) }))
+    .map((record) => ({ record, distance: record.mesh.position.distanceTo(contact.point) }))
     .filter(({ distance }) => distance <= damageRadius)
     .sort((a, b) => a.distance - b.distance);
   if (!impacted.some(({ record }) => record === directRecord)) {
@@ -538,35 +513,17 @@ function damageFromProjectile(hit, direction) {
 
   let brokenBonds = physics.damageShards(impacted.map(({ record }) => record.index));
   brokenBonds += physics.detachShard(directRecord.index);
-  const clusterImpulses = new Map();
-
-  for (const { record, distance } of impacted) {
+  for (const { record } of impacted) {
     physics.releaseShard(record.index);
-    const falloff = Math.max(0.22, 1 - distance / damageRadius);
-    const radial = record.mesh.position.clone().sub(hit.point).normalize();
-    const impulse = direction.clone().multiplyScalar(state.impactForce * 1.2 * falloff)
-      .add(radial.multiplyScalar(state.impactForce * 0.35 * falloff));
-    const clusterId = physics.getClusterIdForShard(record.index);
-    const entry = clusterImpulses.get(clusterId) ?? {
-      index: record.index,
-      impulse: new THREE.Vector3(),
-      count: 0,
-    };
-    entry.impulse.add(impulse);
-    entry.count++;
-    clusterImpulses.set(clusterId, entry);
-  }
-
-  for (const entry of clusterImpulses.values()) {
-    entry.impulse.multiplyScalar(1 / entry.count);
-    physics.addImpulseToShard(entry.index, entry.impulse, hit.point);
   }
 
   const support = physics.releaseUnsupported();
   state.stats.bodies = physics.getClusterCount();
   state.stats.joints = physics.constraints.length;
-  status.textContent = `Ball impact: broke ${brokenBonds} bonds, ${state.stats.bodies} bodies, ${state.stats.joints} joints, ${support.anchors} anchors.`;
+  const forceKilonewtons = (contact.force / 1000).toFixed(1);
+  status.textContent = `Ball contact ${forceKilonewtons} kN: broke ${brokenBonds} bonds, ${state.stats.bodies} bodies, ${state.stats.joints} joints, ${support.anchors} anchors.`;
   panel.draw();
+  return true;
 }
 
 function removeProjectile(index) {
